@@ -1,0 +1,30 @@
+# ScheduleForge - settings of a run (version 3.0).
+# A threshold that is not written here is off. A name that is written turns the
+# threshold on and gives it its own k.
+
+# 2.1  at least k days between two obligatory exams of the same program and year
+min_days_between_obligatory = 3
+
+# 2.2  at least k days between two exams of the same program and year
+# min_days_between_any = 2
+
+# 2.3  at most k collisions between two elective courses of a program
+max_elective_collisions = 1
+
+# 2.4  at least k days from the first to the last obligatory exam of a year
+# min_obligatory_span = 10
+
+# 2.5  at most k exams on one day
+max_exams_per_day = 5
+
+# every exam has to be seated in the rooms of the campus
+require_rooms = yes
+
+# Sorting (section 3), the most important criterion first.
+sort = min_days_between_obligatory, average_days_between_exams
+
+# How large the search may grow.
+max_candidates = 200
+max_examined = 200000
+time_limit_seconds = 30
+default_students = 60

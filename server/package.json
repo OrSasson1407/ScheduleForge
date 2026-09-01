@@ -1,0 +1,14 @@
+{
+  "name": "scheduleforge-collab-server",
+  "private": true,
+  "version": "1.0.0",
+  "description": "ScheduleForge's server: real-time collaboration relay plus accounts and the published schedule.",
+  "type": "commonjs",
+  "main": "index.js",
+  "scripts": {
+    "start": "node index.js"
+  },
+  "dependencies": {
+    "ws": "^8.18.0"
+  }
+}

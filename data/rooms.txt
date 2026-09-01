@@ -1,0 +1,32 @@
+$$$$
+Hall 1101-A
+250
+Building 1101, ground floor
+$$$$
+Hall 1101-B
+200
+Building 1101, ground floor
+$$$$
+Room 1101-205
+150
+Building 1101, floor 2
+$$$$
+Room 1102-110
+120
+Building 1102, floor 1
+$$$$
+Room 1102-114
+100
+Building 1102, floor 1
+$$$$
+Room 1103-301
+80
+Building 1103, floor 3
+$$$$
+Room 1103-302
+60
+Building 1103, floor 3
+$$$$
+Room 1104-021
+40
+Building 1104, ground floor

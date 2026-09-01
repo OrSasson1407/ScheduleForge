@@ -1,0 +1,142 @@
+$$$$
+Introduction to Computer Science
+83112
+Dr. A. Levi
+83101,1,FALL,Obligatory
+83108,1,FALL,Obligatory
+Exam
+220
+$$$$
+Linear Algebra 1
+83113
+Prof. R. Cohen
+83101,1,FALL,Obligatory
+83102,1,FALL,Obligatory
+83108,1,FALL,Obligatory
+Exam
+240
+$$$$
+Calculus 1
+83114
+Prof. R. Cohen
+83101,1,FALL,Obligatory
+83102,1,FALL,Obligatory
+83108,1,FALL,Obligatory
+Exam
+240
+$$$$
+Physics 1
+83131
+Prof. O. Some
+83101,1,SPRI,Obligatory
+83102,1,SPRI,Obligatory
+83108,1,SPRI,Obligatory
+Exam
+230
+$$$$
+Data Structures
+83116
+Dr. A. Levi
+83101,2,FALL,Obligatory
+83108,2,FALL,Obligatory
+Exam
+180
+$$$$
+Digital Systems
+83117
+Dr. M. Bar
+83101,2,FALL,Obligatory
+83102,2,FALL,Obligatory
+Exam
+160
+$$$$
+Object Oriented Programming
+83118
+Dr. Y. Shani
+83108,2,SPRI,Obligatory
+83101,2,SPRI,Elective
+Exam
+140
+$$$$
+Signals and Systems
+83119
+Prof. O. Some
+83102,2,SPRI,Obligatory
+Exam
+90
+$$$$
+Software Engineering Workshop
+83120
+Dr. Y. Shani
+83108,3,FALL,Obligatory
+Project
+$$$$
+Operating Systems
+83121
+Dr. M. Bar
+83101,3,FALL,Obligatory
+83108,3,FALL,Obligatory
+Exam
+130
+$$$$
+Computer Networks
+83122
+Dr. N. Katz
+83101,3,SPRI,Obligatory
+83108,3,SPRI,Obligatory
+Exam
+120
+$$$$
+Electronic Circuits
+83123
+Prof. E. Regev
+83102,3,FALL,Obligatory
+83101,3,FALL,Elective
+Exam
+95
+$$$$
+Machine Learning
+83124
+Dr. N. Katz
+83108,4,FALL,Elective
+83101,4,FALL,Elective
+Exam
+70
+$$$$
+Computer Vision
+83125
+Dr. S. Adler
+83108,4,FALL,Elective
+83101,4,FALL,Elective
+Exam
+55
+$$$$
+Control Theory
+83126
+Prof. E. Regev
+83102,4,FALL,Obligatory
+Exam
+60
+$$$$
+Final Project
+83127
+Dr. Y. Shani
+83101,4,SPRI,Obligatory
+83102,4,SPRI,Obligatory
+83108,4,SPRI,Obligatory
+Project
+$$$$
+Ethics in Engineering
+83128
+Dr. S. Adler
+83101,4,SPRI,Obligatory
+83102,4,SPRI,Obligatory
+83108,4,SPRI,Obligatory
+Attendance
+$$$$
+Advanced Databases
+83129
+Dr. S. Adler
+83107,3,SPRI,Obligatory
+Exam
+45
