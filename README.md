@@ -32,9 +32,12 @@ interfaces:
 
 # Version 2.0 - the screens
 
-A React application in TypeScript. It runs in the browser on its own; a small
-Node server is only needed for real-time collaboration (below), and is
-optional otherwise.
+A React application in TypeScript. It runs in the browser, but needs the
+small Node server of `server/` (below) for anything that has to be shared
+between browsers rather than kept to the one that made it: signing in,
+real-time collaboration, and publishing a schedule for students to see.
+Without the server running, the software still loads, but no one can get
+past the sign-in screen.
 
 ## Running
 
@@ -157,7 +160,7 @@ draggable - enforced both on the screen itself and, independently, by the
 relay server, so it holds even for a viewer that tries to bypass their own
 browser. Everyone in the room sees who is an editor and who is a viewer.
 
-This needs the small relay server of `server/`, run separately:
+This needs the small server of `server/`, run separately:
 
 ```bash
 cd server
@@ -171,15 +174,40 @@ npm install
 npm start
 ```
 
-It listens on `ws://localhost:8787` and holds nothing but a live relay: no
-scheduling rule is checked there, since the browser already knows every rule
-and only asks the server to arbitrate who may drag which exam right now.
-Everyone who wants to edit the same exam system opens the "🤝 Collaborate"
-panel in the header, gives the server address (the default is right for
-everyone on the same machine or network as the server), agrees on a room code
-out loud, picks a name and picks whether to join as an editor or a viewer.
-The server keeps a room only in memory, so restarting it forgets everything -
-which is enough for a classroom session.
+It listens on `ws://localhost:8787` for collaboration and, on the same port,
+to plain HTTP requests for signing in and publishing a schedule (below). For
+collaboration specifically, it holds nothing but a live relay: no scheduling
+rule is checked there, since the browser already knows every rule and only
+asks the server to arbitrate who may drag which exam right now. Everyone who
+wants to edit the same exam system opens the "🤝 Collaborate" panel in the
+header, gives the server address (the default is right for everyone on the
+same machine or network as the server), agrees on a room code out loud, picks
+a name and picks whether to join as an editor or a viewer. A room lives only
+in memory, so restarting the server forgets it - enough for one classroom
+session. The accounts and the published schedule the next section describes
+are not room state and do persist across a restart, kept on disk in
+`server/data.json`.
+
+## Accounts and roles
+
+The whole application sits behind a sign-in screen, and who signs in decides
+what they see: an **editor** sees everything described above, unchanged; a
+**viewer** (a student) sees exactly one read-only page - the exam schedule an
+editor chose to publish, with a "Publish for students" button on the Output
+screen; an **admin** sees exactly one page too - every editor account that has
+registered, pending ones first, each with an Approve / Reject button. A new
+instructor registers from a link on the sign-in card and stays **pending**,
+unable to sign in, until an admin approves them - and since that approval has
+to be visible on whichever computer the new instructor signs in from next,
+which is not necessarily the one they registered on, it is the server that
+holds the account, not either browser's own storage.
+
+Three accounts exist from a fresh `server/data.json`: `admin` / `admin123`,
+`editor` / `editor123`, and `student` / `student123`. This is still not a
+production authentication system - no HTTPS, no rate limiting, no password
+reset, and a session token lasts only until the server restarts - see
+`DESIGN.md`, part IX for the full design and the reasoning behind each of
+those limits.
 
 ---
 
