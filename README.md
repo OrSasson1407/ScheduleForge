@@ -1,5 +1,7 @@
 # ScheduleForge
 
+[![GitHub repo](https://img.shields.io/badge/GitHub-OrSasson1407%2FScheduleForge-181717?logo=github)](https://github.com/OrSasson1407/ScheduleForge)
+
 Exam scheduling tool for the Faculty of Engineering: it reads the courses, the
 exam periods and the study programs the user selected, and produces the conflict
 free exam systems.
