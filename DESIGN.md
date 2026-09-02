@@ -39,8 +39,15 @@ each reading a narrower slice of a place's schedule, and everything that
 phrase "no longer a demo" required underneath - a real database, sessions
 that expire, a password reset that survives being asked twice, and an
 actual path to a server another person could depend on rather than one
-that only ever ran on the machine that built it. The code holds the
-internal documentation that completes all ten.
+that only ever ran on the machine that built it. Part XI (sections 53 to
+57) describes the one piece of part X that did not survive contact with an
+actual deployment: Postgres, whose free tier turned out to expire 30 days
+after creation, replaced with Firestore, whose free tier does not expire at
+all - the database swapped out from underneath `server/store.js` a second
+time, what had to change to move from rows to documents, and the real
+Blueprint bugs and a real, live walkthrough of standing the whole thing up
+that only doing it for real, not just building toward it, ever surfaced.
+The code holds the internal documentation that completes all eleven.
 
 The requirements of the extension of section 4 are specified in a document of
 their own, `REQUIREMENTS-V3-EXTENSION.md`, as requirement 4.2 asks.
@@ -1983,4 +1990,161 @@ a smaller project that never needed it at all.
   throughout, and `.github/workflows/ci.yml` gained a third job running
   `server/test/api.test.js` against a real Postgres service container -
   confirmed passing in GitHub's own Actions runner, not only locally.
+
+---
+
+# Part XI - Firestore, and what only deploying for real ever finds
+
+Part X's own section 50 said Postgres's free tier was "fine for standing
+this up and trying it, not something to leave unattended long-term" and
+moved on. That sentence turned out to be more literal than it read: the
+free database Part X's own live walkthrough actually created carried a
+30-day expiration stamped on it the moment it existed, visible only once
+something had actually been deployed rather than merely built toward. This
+part is the fix, and everything else that only surfaced by going the rest
+of the way - creating the real accounts, generating a real credential,
+watching a real deploy fail and then succeed - that building the software
+alone never would have shown.
+
+## 53. Why Postgres didn't survive contact with an actual deployment
+
+Render's free Postgres plan is real - no card needed to create it - but
+time-limited in a way its paid tiers are not: deleted 30 days after
+creation, with a 14-day grace period to upgrade first. Nothing in `server/`
+depended on that timer, but the deployment as a whole did, silently, the
+moment `render.yaml`'s database block went live - a fact `DEPLOYMENT.md`
+already flagged honestly once it was discovered, but a design document
+should not keep a component whose foundation is a countdown. Firebase's
+Spark plan is the replacement specifically because it has no equivalent
+timer: free, indefinitely, at daily limits (50K reads, 20K writes, 20K
+deletes, 1 GiB storage) an application at this scale - a handful of
+institutions, one schedule per place - has no realistic path to reaching.
+
+## 54. From rows to documents
+
+`server/db.js` no longer opens a connection pool to a SQL server; it
+initializes the Firebase Admin SDK, either against a real project
+(`FIREBASE_SERVICE_ACCOUNT`, a service account's full JSON key as one
+environment variable) or the local emulator (`FIRESTORE_EMULATOR_HOST`),
+chosen by which of the two is set. `server/store.js`'s four SQL tables
+became four Firestore collections with the same shape - `places`,
+`accounts`, `sessions`, `published` - keyed the same way an account's
+document ID is still its own username, so "does this username exist" is
+still one lookup, not a query.
+
+Two things came out simpler than the SQL version, not just different.
+First, there is no more `rowToAccount` translating `display_name` into
+`displayName` - a Firestore document's fields are already whatever shape
+the code wrote them in, so the mapping function that existed only to
+undo SQL's own naming convention simply had nothing left to do. Second,
+and a genuine correctness improvement rather than a wash: `register`
+used to check `findAccount` first and insert second, the same
+race-prone shape a real unique constraint on the `username` column
+happened to paper over without the code ever handling the conflict it
+could still have raised. Firestore's `.create()` fails outright if the
+document already exists, so the check and the write are now the same
+atomic operation, with the failure handled (`FIRESTORE_ALREADY_EXISTS`)
+rather than merely made unlikely.
+
+One thing came out needing more care, not less: Postgres's
+`UPDATE ... RETURNING` did an atomic read-modify-write in one round trip,
+which `recordFailedLogin` and `accountForToken`'s sliding session expiry
+both leaned on. Firestore has no single statement shaped like that;
+`db.runTransaction` is the replacement, reading the current document and
+writing its update inside one transaction so two requests racing to touch
+the same account or the same session still cannot interleave into a wrong
+result - more code than the SQL version needed for the same guarantee, not
+less, but the guarantee itself did not change.
+
+## 55. Testing without a real cloud dependency
+
+`server/test/api.test.js` did not change - the same eight assertions
+against the same HTTP API - but what it runs against did: the Firebase
+Local Emulator Suite (`server/firebase.json`, a Java-based Firestore
+emulator the Firebase CLI downloads and manages) instead of a disposable
+Postgres container. `server/firestore.rules` denies every client read and
+write outright (`allow read, write: if false`) - not a placeholder to
+tighten later, the actual intended production posture, since nothing in
+this project ever reaches Firestore except through the server's own Admin
+SDK, which bypasses security rules entirely by design, whether it is
+talking to a real project or the emulator. The two are indistinguishable
+to `server/store.js`; only `server/db.js`'s initialization branches on
+which one it is pointed at.
+
+`npm run test:ci` wraps the whole thing in `firebase emulators:exec`,
+which starts the emulator, waits until it is actually ready, runs the
+wrapped command, and tears the emulator down again - one command instead
+of hand-rolling the start/wait/stop sequence a Postgres service container
+got from GitHub Actions for free. `.github/workflows/ci.yml`'s server job
+gained an `actions/setup-java` step for exactly this reason: the emulator
+needs a JVM, which the Node-only job never had to think about before.
+
+## 56. Deploying it for real
+
+Everything above was verified against the emulator and the built Docker
+image before touching Render at all - the same discipline Part X's own
+section 52 already established. What follows is what only touching Render,
+and Firebase's own console, for real actually found, none of it visible
+from reading the code:
+
+* **`render.yaml`'s own schema was wrong**, caught by Render's Blueprint
+  validator refusing to deploy it: an environment variable cannot specify
+  both `value` and `sync: false` at once, which every `sync: false` entry
+  from Part X's own section 50 did. A second, separate bug followed once
+  that one was fixed - an omitted `plan:` defaults to a paid tier, not
+  free, for both a database and a web service, so `render.yaml` now names
+  `plan: free` explicitly on `scheduleforge-server` rather than relying on
+  a default that was never actually free.
+* **Render asks for payment information even on the free plan**, once a
+  Blueprint with a database was involved - a real requirement of the
+  platform, surfaced only by actually clicking "Deploy" and hitting the
+  prompt, not documented anywhere reasoning about the YAML alone would
+  have found. `DEPLOYMENT.md` says so plainly, including that entering the
+  card details is a step only the person deploying this can take.
+* **Setting up the Firebase project itself was a real, separate, first
+  walkthrough** - `console.firebase.google.com`, a new project on the
+  Spark plan, a Firestore database created in production mode (matching
+  `firestore.rules`'s own deny-by-default posture from the moment it
+  exists), and a service account's private key generated once, downloaded
+  as a JSON file, and pasted directly into Render's environment settings
+  by a person, never by whatever was assisting with the deployment -
+  entering an API credential into a field is not delegated, the same
+  boundary this project's own passwords have been held to throughout.
+* **The database migration was not a migration.** Firestore starts empty;
+  nothing that existed in the Postgres deployment - the admin account, any
+  place, any registration - carried over, because there was never a
+  script or a step that could have moved it, only a different backend
+  entirely swapped in underneath the same code. The first sign-in against
+  the new database used a freshly generated bootstrap admin password,
+  exactly as `ensureBootstrapAdmin` produces for any database that has
+  never seen an admin account before - the mechanism worked exactly as
+  designed for a first deploy, which, from Firestore's side, this was.
+* **The old database, once nothing referenced it, was deleted outright**
+  rather than left running toward its own 30-day expiration - `render.yaml`
+  no longer has a `databases:` block at all, so there was nothing left for
+  Render's own Blueprint sync to manage even if it had been left in place.
+
+## 57. What was checked
+
+* **The full server rewrite, against the real emulator, not a mock** - the
+  same suite section 52 already ran against Postgres, unchanged in what it
+  asserts, run again against Firestore: the place → editor → approve →
+  publish → student flow, cross-place isolation, and the password-reset →
+  forced-change flow all passed against a freshly started emulator.
+* **The actual production Docker image, rebuilt and rerun** - built from
+  the same `server/Dockerfile`, this time installing `firebase-admin`
+  instead of `pg`; a real lockfile/npm-version mismatch surfaced here (the
+  image's older bundled npm disagreeing with a lockfile a newer npm had
+  written) and was fixed by pinning npm's version inside the image itself,
+  not papered over by regenerating the lockfile again.
+* **The whole deployment, end to end, on the real Render and Firebase
+  services** - not a rehearsal: the Firebase project and Firestore
+  database created from nothing, the service account key generated and
+  wired into Render's environment, a Blueprint deploy that failed exactly
+  as designed (loudly, before serving anything) while the previous,
+  working Postgres-backed deploy kept serving traffic underneath it, a
+  second deploy that succeeded once the credential was in place, a
+  freshly generated admin password confirmed by actually signing in at
+  the live URL, and the now-orphaned Postgres database deleted only after
+  all of that was confirmed working.
 
