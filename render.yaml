@@ -1,19 +1,12 @@
 # Render Blueprint (https://render.com/docs/blueprint-spec): the whole
 # production deployment as one file, so "connect this repo" is most of the
 # setup. See DEPLOYMENT.md for the manual steps a file cannot do for you
-# (creating the Render account, connecting GitHub, filling in the five
-# `sync: false` values below, pointing a domain at it).
-
-databases:
-  - name: scheduleforge-db
-    databaseName: scheduleforge
-    user: scheduleforge
-    # Render defaults a new database to a paid plan (0.1c-256mb) if this is
-    # left out - free is a real $0/month tier, not the default, and has to
-    # be named explicitly. Render's free Postgres is also time-limited (see
-    # your dashboard for the current window) - fine for trying this out, not
-    # for something meant to keep running unattended for good.
-    plan: free
+# (creating the Render account, connecting GitHub, a Firebase project,
+# filling in the six `sync: false` values below, pointing a domain at it).
+#
+# No `databases:` section - the database is Firestore (server/db.js), which
+# lives in a Firebase project rather than something Render provisions, and
+# is reached through the FIREBASE_SERVICE_ACCOUNT secret below.
 
 services:
   - name: scheduleforge-server
@@ -22,8 +15,8 @@ services:
     dockerfilePath: ./server/Dockerfile
     dockerContext: ./server
     healthCheckPath: /healthz
-    # Same reasoning as the database above: omitting this defaults to a paid
-    # starter plan (0.5c-512mb), not free.
+    # Render defaults an omitted plan to a paid starter tier (0.5c-512mb),
+    # not free - this has to be named explicitly to get the $0/month tier.
     plan: free
     # The collaboration relay keeps its room state (who is editing what) in
     # this one process's own memory, not in the database or Redis - a second
@@ -32,10 +25,11 @@ services:
     # header comment says where); until then, this has to stay exactly 1.
     numInstances: 1
     envVars:
-      - key: DATABASE_URL
-        fromDatabase:
-          name: scheduleforge-db
-          property: connectionString
+      # The full JSON key of a Firebase service account, as one line - see
+      # DEPLOYMENT.md's Firebase setup step. Required; the server refuses to
+      # start without either this or FIRESTORE_EMULATOR_HOST.
+      - key: FIREBASE_SERVICE_ACCOUNT
+        sync: false
       # The web static site's real URL, filled in once it exists (Render
       # assigns it on first deploy) - see DEPLOYMENT.md step 4.
       - key: ALLOWED_ORIGIN

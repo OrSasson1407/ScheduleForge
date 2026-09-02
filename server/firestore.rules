@@ -1,0 +1,16 @@
+// Deny every client-side read and write, deliberately. Nothing in
+// ScheduleForge ever talks to Firestore from a browser - only this server
+// does, through the Admin SDK (server/db.js), which bypasses these rules
+// entirely whether it is talking to a real Firestore project or (as in
+// server/test/api.test.js and CI) the local emulator. "if false" is
+// therefore both the safe default and a no-op for how this project
+// actually uses Firestore - never loosen this to let a client SDK in
+// unless something in this codebase starts using one.
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    match /{document=**} {
+      allow read, write: if false;
+    }
+  }
+}

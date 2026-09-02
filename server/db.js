@@ -1,66 +1,49 @@
 /**
- * The Postgres connection this server runs on in production - replacing the
- * single `server/data.json` file the classroom-grade version of this server
- * used, which had no concurrency safety, no backups, and could not survive
- * a redeploy on a platform with an ephemeral filesystem (which is exactly
- * what a managed host like Render gives a web service's own disk).
+ * The Firestore connection this server runs on - replacing Postgres, which
+ * had no truly free tier that did not expire (Render's free database is
+ * deleted 30 days after creation). Firebase's Spark plan is free with no
+ * card and no expiration, at daily limits (50K reads, 20K writes, 20K
+ * deletes, 1 GiB storage) far past anything a handful of institutions'
+ * worth of accounts and one schedule per place would ever reach.
  *
- * `DATABASE_URL` is required; there is no file-based fallback on purpose -
- * a production server should fail loudly at startup if it has nowhere to
- * put its data, not quietly fall back to something that will lose it.
+ * Two ways to reach it, chosen by which environment variable is set:
+ *
+ *   - `FIRESTORE_EMULATOR_HOST` (e.g. "localhost:8080") - local development
+ *     and CI, talking to the Firebase Local Emulator Suite. No real Google
+ *     Cloud project or credentials needed at all; `FIREBASE_PROJECT_ID` can
+ *     be any string in this mode, since nothing real is being addressed.
+ *   - `FIREBASE_SERVICE_ACCOUNT` - production, the full JSON key of a
+ *     Firebase service account (Project Settings -> Service Accounts ->
+ *     Generate new private key), pasted as one environment variable rather
+ *     than a file on disk, since a platform like Render has nowhere
+ *     persistent to put a file that is not itself checked into the repo.
  */
 
-const { Pool } = require("pg");
+const admin = require("firebase-admin");
 
-if (!process.env.DATABASE_URL) {
-  throw new Error("DATABASE_URL is not set - see server/.env.example");
+let app;
+if (process.env.FIRESTORE_EMULATOR_HOST) {
+  app = admin.initializeApp({ projectId: process.env.FIREBASE_PROJECT_ID || "scheduleforge-dev" });
+} else {
+  if (!process.env.FIREBASE_SERVICE_ACCOUNT) {
+    throw new Error(
+      "Neither FIRESTORE_EMULATOR_HOST nor FIREBASE_SERVICE_ACCOUNT is set - see server/.env.example"
+    );
+  }
+  let serviceAccount;
+  try {
+    serviceAccount = JSON.parse(process.env.FIREBASE_SERVICE_ACCOUNT);
+  } catch {
+    throw new Error("FIREBASE_SERVICE_ACCOUNT is not valid JSON");
+  }
+  app = admin.initializeApp({ credential: admin.credential.cert(serviceAccount) });
 }
 
-// Managed Postgres (Render and similar) terminates TLS with a certificate
-// that is not in Node's default trust store; the connection is still
-// encrypted, just not verified against a public CA, which is the standard,
-// documented tradeoff these platforms expect internal connections to make.
-// Set DATABASE_SSL=disable for a local database that has no TLS at all.
-const ssl = process.env.DATABASE_SSL === "disable" ? false : { rejectUnauthorized: false };
+const db = admin.firestore(app);
+// Accounts have fields that only apply to one role (a teacher's
+// instructorNames, a student's program and year); the ones that do not
+// apply are simply undefined rather than null, and Firestore rejects
+// undefined values by default.
+db.settings({ ignoreUndefinedProperties: true });
 
-const pool = new Pool({ connectionString: process.env.DATABASE_URL, ssl });
-
-const SCHEMA = `
-  CREATE TABLE IF NOT EXISTS places (
-    id TEXT PRIMARY KEY,
-    name TEXT NOT NULL,
-    kind TEXT NOT NULL
-  );
-
-  CREATE TABLE IF NOT EXISTS accounts (
-    username TEXT PRIMARY KEY,
-    password TEXT NOT NULL,
-    display_name TEXT NOT NULL,
-    role TEXT NOT NULL CHECK (role IN ('admin', 'editor', 'teacher', 'student')),
-    status TEXT NOT NULL CHECK (status IN ('approved', 'pending')),
-    place_id TEXT REFERENCES places(id) ON DELETE CASCADE,
-    instructor_names JSONB,
-    program TEXT,
-    year INTEGER,
-    failed_attempts INTEGER NOT NULL DEFAULT 0,
-    locked_until TIMESTAMPTZ,
-    must_change_password BOOLEAN NOT NULL DEFAULT FALSE
-  );
-
-  CREATE TABLE IF NOT EXISTS sessions (
-    token TEXT PRIMARY KEY,
-    username TEXT NOT NULL REFERENCES accounts(username) ON DELETE CASCADE,
-    expires_at TIMESTAMPTZ NOT NULL
-  );
-
-  CREATE TABLE IF NOT EXISTS published_schedules (
-    place_id TEXT PRIMARY KEY REFERENCES places(id) ON DELETE CASCADE,
-    schedule JSONB NOT NULL
-  );
-`;
-
-async function migrate() {
-  await pool.query(SCHEMA);
-}
-
-module.exports = { pool, migrate };
+module.exports = { db };

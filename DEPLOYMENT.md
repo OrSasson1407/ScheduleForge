@@ -8,45 +8,86 @@ does not cover.
 
 ## What gets deployed where
 
-Three pieces, one Render account:
+Two pieces on Render, plus one on Firebase:
 
 - **`scheduleforge-server`** - the Node server (`server/`), built from
   `server/Dockerfile`, running the collaboration relay and the
   accounts/places/publishing HTTP API.
 - **`scheduleforge-web`** - the React app (`web/`), built as a static site
   and served directly - no server-side rendering, nothing dynamic in it.
-- **`scheduleforge-db`** - a managed Postgres database, used only by
-  `scheduleforge-server`.
+- **A Firestore database**, in a Firebase project - not something Render
+  provisions. Chosen specifically because its free (Spark) tier is free
+  indefinitely, no card, no expiration - unlike Render's own free Postgres,
+  which is deleted 30 days after creation. `scheduleforge-server` is the
+  only thing that ever talks to it, through the Admin SDK
+  (`server/db.js`), never a client SDK in the browser.
 
-All three are defined in `render.yaml` at the repo root (a Render
-"Blueprint"), so connecting the repo creates all three in one pass.
+The two Render services are defined in `render.yaml` at the repo root (a
+Render "Blueprint"), so connecting the repo creates both in one pass. The
+Firebase project is set up once, by hand, first (below).
 
-## Local development, now that there is a real database
+## Local development
 
-`server/data.json` is gone; the server needs `DATABASE_URL` set to reach a
-real Postgres, even locally. The quickest local one:
+The server needs either a real Firebase project or the local Firestore
+emulator - never a database on your own machine the way Postgres would have
+needed one. For local development and running the test suite, the emulator
+is the right choice; it needs the Firebase CLI and a JVM (Firestore's
+emulator is Java-based):
 
 ```bash
-docker run -d --name scheduleforge-db -e POSTGRES_PASSWORD=dev -e POSTGRES_DB=scheduleforge -p 5432:5432 postgres:16-alpine
+npm install -g firebase-tools
 ```
 
-Then, from `server/`, copy `.env.example` to `.env` and load it before
-starting the server (the server reads real environment variables, not `.env`
+Then, from `server/`:
+
+```bash
+npm install
+npm run test:ci        # starts the emulator, runs server/test/api.test.js against it, stops it
+```
+
+To run the server itself against the emulator (rather than just the tests),
+start the emulator in one terminal and the server in another, both pointed
+at it - copy `.env.example` to `.env`, keep its
+`FIRESTORE_EMULATOR_HOST`/`FIREBASE_PROJECT_ID` lines as they are, and load
+it before starting (the server reads real environment variables, not `.env`
 files directly - use your shell, or a tool like `dotenv-cli`):
 
 ```bash
-cd server
-npm install
-env $(cat .env | xargs) npm start
+firebase emulators:start --only firestore --project scheduleforge-dev   # terminal 1
 ```
 
-The first run creates its tables automatically (`server/db.js`'s `migrate`)
-and, if `SEED_DEMO_ACCOUNTS=true` in your `.env`, the same four demo accounts
-the classroom-grade version had (`admin`/`admin123`, `editor`/`editor123`,
-`teacher`/`teacher123`, `student`/`student123`). Leave it `false` and the
-server creates exactly one `admin` account instead, using `ADMIN_PASSWORD`
-from `.env` (or, if that's blank too, a random password printed once to the
-server's own log the moment it starts).
+```bash
+env $(cat .env | xargs) npm start   # terminal 2
+```
+
+The emulator starts empty every time (nothing persists between runs unless
+you pass `--export-on-exit`/`--import`), so the first request creates the
+bootstrap admin account fresh, and `SEED_DEMO_ACCOUNTS=true` in `.env` seeds
+the same four demo accounts the classroom-grade version had
+(`admin`/`admin123`, `editor`/`editor123`, `teacher`/`teacher123`,
+`student`/`student123`).
+
+## Setting up the Firebase project
+
+**1. Create the project.**
+[console.firebase.google.com](https://console.firebase.google.com) → Add
+project → name it, decline Google Analytics (not needed here) → Create.
+
+**2. Create the Firestore database.**
+In the new project, **Build → Firestore Database → Create database**. Any
+region is fine (pick one close to wherever Render deploys the server, if you
+want to minimize latency); start in **production mode** - the security rules
+this repo ships (`server/firestore.rules`) deny every client-side read and
+write on purpose, since only the server's Admin SDK ever touches this data,
+and production mode matches that ruleset's intent. Confirm the plan shown is
+**Spark (free)**.
+
+**3. Generate a service account key.**
+**Project settings (gear icon) → Service accounts → Generate new private
+key**. This downloads a JSON file - treat it exactly like a password, never
+commit it to the repository. Its entire content (as one line, or however
+your platform accepts a multi-line secret) is what `FIREBASE_SERVICE_ACCOUNT`
+is set to in the next section.
 
 ## Deploying to Render
 
@@ -56,32 +97,31 @@ Render to see your GitHub repositories (you can limit it to just this one).
 
 **2. New Blueprint.**
 Dashboard → **New** → **Blueprint** → pick this repository. Render reads
-`render.yaml` and shows the three services it is about to create
-(`scheduleforge-db`, `scheduleforge-server`, `scheduleforge-web`), both
-compute ones (`scheduleforge-db`, `scheduleforge-server`) pinned to the
-`free` plan explicitly in the file - Render defaults a new service to a
-*paid* starter plan if a Blueprint does not say otherwise, so this is not
-optional to get the $0/month tier. The free Postgres database still expires
-30 days after creation regardless (a 14-day grace period to upgrade before
-Render deletes it, with email warnings before both) - fine for standing this
-up and trying it, not something to leave unattended long-term without either
-upgrading it or planning to recreate it.
+`render.yaml` and shows the two services it is about to create
+(`scheduleforge-server`, `scheduleforge-web`), `scheduleforge-server` pinned
+to the `free` plan explicitly in the file - Render defaults a new service to
+a *paid* starter plan if a Blueprint does not say otherwise, so this is not
+optional to get the $0/month tier. Unlike the Postgres this project used to
+run on, there is no expiration to plan around here - Firestore's free tier
+is free indefinitely.
 
-**3. Add a card, fill in the prompted secrets, then deploy anyway.**
-Even on the free plan, Render asks for payment information on file before a
-Blueprint with a database will proceed - a real requirement, not a bug in
-this repo's config, and one only you can complete (entering payment details
-is not something to hand to an AI assistant, including this one). It also
-asks for `ALLOWED_ORIGIN`, `ADMIN_PASSWORD`, `SENTRY_DSN`, `VITE_API_URL` and
+**3. Fill in the prompted secrets, then deploy anyway.**
+Render may still ask for payment information on file even on the free plan
+(a $1 verification charge that is refunded, not an actual bill) - if so,
+that is only you to complete, the same as any payment detail (entering
+payment or card information is not something to hand to an AI assistant,
+including this one). It also asks for `FIREBASE_SERVICE_ACCOUNT`,
+`ALLOWED_ORIGIN`, `ADMIN_PASSWORD`, `SENTRY_DSN`, `VITE_API_URL` and
 `VITE_WS_URL` up front (each marked `sync: false` in `render.yaml`
-specifically so you're asked, rather than committed to the repo). You do
-not know the real URLs yet at this point - **leave `ALLOWED_ORIGIN`,
-`VITE_API_URL` and `VITE_WS_URL` blank** and deploy anyway; the first build
-of the web app will fail to reach the server, and that is expected. Fix it
-in the next step. `SENTRY_DSN` can stay blank indefinitely (see "Error
-tracking and uptime alerting" below); set `ADMIN_PASSWORD` now if you want
-to choose it yourself rather than read a generated one out of the logs
-afterward.
+specifically so you're asked, rather than committed to the repo). Paste in
+`FIREBASE_SERVICE_ACCOUNT` now (the whole JSON key from Firebase step 3
+above) - the server will not start without it. You do not know the real
+service URLs yet at this point - **leave `ALLOWED_ORIGIN`, `VITE_API_URL`
+and `VITE_WS_URL` blank** and deploy anyway; the first build of the web app
+will fail to reach the server, and that is expected. Fix it in the next
+step. `SENTRY_DSN` can stay blank indefinitely (see "Error tracking and
+uptime alerting" below); set `ADMIN_PASSWORD` now if you want to choose it
+yourself rather than read a generated one out of the logs afterward.
 
 **4. Wire the two services together.**
 Once both services exist, Render has assigned each a URL, something like:
@@ -132,13 +172,15 @@ match wherever the web app is actually served from.
   `message`, plus whatever context that event carries) specifically so a log
   viewer or a downstream tool can filter and search on those fields instead
   of grepping sentences.
-- **A crashed server auto-restarts.** If the database is briefly unreachable
-  on boot (a redeploy racing a database restart, say), `server/index.js`
-  exits rather than retrying forever - Render treats that as a crash and
-  restarts the service, which is the intended recovery path, not a bug.
-- **Backups**: Render's managed Postgres takes automatic daily backups on
-  every paid plan; the free tier does not - check your plan before relying
-  on this being true for you.
+- **A crashed server auto-restarts.** If Firestore is briefly unreachable on
+  boot, or `FIREBASE_SERVICE_ACCOUNT` is missing or malformed,
+  `server/index.js` throws rather than starting half-working - Render treats
+  that as a crash and restarts the service, which is the intended recovery
+  path, not a bug.
+- **Backups**: the Spark (free) plan does not include Firestore's managed
+  scheduled backups, which needs the pay-as-you-go Blaze plan - check the
+  Firebase console's current options before relying on any particular
+  backup mechanism being active for you.
 
 ## Error tracking and uptime alerting
 

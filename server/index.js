@@ -29,7 +29,7 @@
  * trusted from anything the client sends - so one place's editor can never
  * publish into another place's schedule by supplying a different id.
  *
- * SECURITY NOTE: production posture, not a toy. Data lives in Postgres
+ * SECURITY NOTE: production posture, not a toy. Data lives in Firestore
  * (`server/db.js`), not a JSON file. Passwords are hashed at rest; a forgotten
  * one is reset by an admin to a random temporary password relayed out of
  * band (there is still no email sending here) and forces a change on next
@@ -86,7 +86,6 @@ const http = require("http");
 const { randomUUID } = require("crypto");
 const { WebSocketServer } = require("ws");
 const store = require("./store");
-const { migrate } = require("./db");
 const log = require("./log");
 const { captureError } = require("./errorTracking");
 const { rateLimited } = require("./rateLimit");
@@ -466,7 +465,6 @@ wss.on("connection", (ws) => {
 });
 
 async function start() {
-  await migrate();
   const generatedAdminPassword = await store.ensureBootstrapAdmin();
   if (generatedAdminPassword) {
     log.warn(
