@@ -11,7 +11,8 @@ function course(programNumbers: string[]): Course {
     enrollments: programNumbers.map((programNumber) => ({
       programNumber,
       year: 1,
-      semester: "FALL",
+      semester: "FALL" as const,
+      requirement: "Obligatory" as const,
     })),
   };
 }

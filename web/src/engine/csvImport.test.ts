@@ -6,7 +6,7 @@ function csvField(value: string): string {
   return /[",\n]/.test(value) ? `"${value.replace(/"/g, '""')}"` : value;
 }
 
-function csv(header: string[], rows: (string | number)[][]): string {
+function csv(header: readonly string[], rows: (string | number)[][]): string {
   const lines = [header.join(",")];
   for (const row of rows) {
     lines.push(row.map((cell) => csvField(String(cell))).join(","));
@@ -24,10 +24,10 @@ const COURSE_HEADER = [
   "Requirement",
   "Evaluation",
   "Students",
-];
+] as const;
 
-function courseRow(overrides: Partial<Record<(typeof COURSE_HEADER)[number], string | number>> = {}) {
-  const defaults: Record<string, string | number> = {
+function courseRow(overrides: Partial<Record<(typeof COURSE_HEADER)[number], string | number>> = {}): (string | number)[] {
+  const defaults: Record<(typeof COURSE_HEADER)[number], string | number> = {
     CourseNumber: "83101",
     CourseName: "Intro to Testing",
     Instructor: "Dr. A",
@@ -148,10 +148,10 @@ describe("parseCoursesCsv", () => {
   });
 });
 
-const PERIOD_HEADER = ["Semester", "Moed", "StartDate", "EndDate", "ExcludedStart", "ExcludedEnd", "Comment"];
+const PERIOD_HEADER = ["Semester", "Moed", "StartDate", "EndDate", "ExcludedStart", "ExcludedEnd", "Comment"] as const;
 
-function periodRow(overrides: Partial<Record<(typeof PERIOD_HEADER)[number], string>> = {}) {
-  const defaults: Record<string, string> = {
+function periodRow(overrides: Partial<Record<(typeof PERIOD_HEADER)[number], string>> = {}): string[] {
+  const defaults: Record<(typeof PERIOD_HEADER)[number], string> = {
     Semester: "FALL",
     Moed: "ALEPH",
     StartDate: "01-01-2026",

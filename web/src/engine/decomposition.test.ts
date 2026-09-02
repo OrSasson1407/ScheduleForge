@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { decompose, iterSolutions, requiredGap } from "./decomposition";
-import { Exam, ExamPeriod, Requirement, Semester, Moed } from "./model";
+import { Exam, ExamPeriod, Requirement } from "./model";
 import { DEFAULT_SETTINGS, Settings } from "./settings";
 
 let nextId = 0;
