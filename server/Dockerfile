@@ -16,7 +16,7 @@ RUN npm install -g npm@11
 COPY package.json package-lock.json ./
 RUN npm ci --omit=dev
 
-COPY db.js errorTracking.js index.js log.js rateLimit.js store.js ./
+COPY db.js email.js errorTracking.js index.js log.js passwordPolicy.js rateLimit.js store.js ./
 
 ENV NODE_ENV=production
 EXPOSE 8787
