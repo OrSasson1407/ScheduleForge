@@ -30,19 +30,16 @@ services:
       # The web static site's real URL, filled in once it exists (Render
       # assigns it on first deploy) - see DEPLOYMENT.md step 4.
       - key: ALLOWED_ORIGIN
-        value: ""
         sync: false
       # Optional: if left blank, the server generates one at first boot and
       # prints it once to this service's own logs - see DEPLOYMENT.md step 5.
       - key: ADMIN_PASSWORD
-        value: ""
         sync: false
       - key: SEED_DEMO_ACCOUNTS
         value: "false"
       # Optional - see DEPLOYMENT.md's "Error tracking and uptime" section.
       # Leaving this blank is fully supported; nothing degrades without it.
       - key: SENTRY_DSN
-        value: ""
         sync: false
 
   - name: scheduleforge-web
@@ -58,8 +55,6 @@ services:
       # the server's real URL, then trigger a manual redeploy. DEPLOYMENT.md
       # step 4 walks through it.
       - key: VITE_API_URL
-        value: ""
         sync: false
       - key: VITE_WS_URL
-        value: ""
         sync: false
