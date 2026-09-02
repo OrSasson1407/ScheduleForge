@@ -30,8 +30,17 @@ over data that is not yet fit to be searched with. Part IX (sections 41 to
 and a read-only viewer for students - a new registration and approval flow
 for editor accounts, and why that flow needed the collaboration server of
 part IV to grow a second, unrelated job rather than staying a browser-only
-check the way the first pass at this feature started out. The code holds the
-internal documentation that completes all nine.
+check the way the first pass at this feature started out. Part X (sections
+46 to 52) describes two changes made at the same time, for the same reason -
+this was no longer one class's worth of accounts and no longer a demo:
+places, so more than one institution can use the same deployment without
+seeing each other's data, a viewer role split into a teacher and a student
+each reading a narrower slice of a place's schedule, and everything that
+phrase "no longer a demo" required underneath - a real database, sessions
+that expire, a password reset that survives being asked twice, and an
+actual path to a server another person could depend on rather than one
+that only ever ran on the machine that built it. The code holds the
+internal documentation that completes all ten.
 
 The requirements of the extension of section 4 are specified in a document of
 their own, `REQUIREMENTS-V3-EXTENSION.md`, as requirement 4.2 asks.
@@ -1732,4 +1741,246 @@ completely unchanged from every part before this one - for an editor.
   `node --check` on both `server/index.js` and `server/store.js` confirmed
   the server half parses correctly, the same baseline check section 16's own
   "what was checked" used for the collaboration server.
+
+---
+
+# Part X - places, and a server built to actually be depended on
+
+Part IX's server was built for one class, running on whichever laptop
+happened to start it, and said so plainly (section 41: "not a production
+authentication system"). This part is the two changes that stopped being
+true together, because they turned out to be the same problem seen from two
+sides: the software was still shaped for exactly one institution's worth of
+data (one shared course list, one shared schedule, one flat set of accounts
+all reaching the same place), and it was still shaped for exactly one
+person's trust in it (a file next to the server process, a session that
+outlived nothing, a password nobody could ever reset). Neither could be
+fixed on its own and still leave the other one true.
+
+## 46. Places: multi-tenancy instead of one shared instance
+
+A **place** (`auth/users.ts`'s `Place` - an id, a name, a free-text `kind`
+the admin typed: "university", "high school", "college", or anything else)
+is the unit everything else now belongs to. Every account except `admin`
+carries a `placeId`; every editor's publish, and every teacher's or
+student's read, is scoped to it. The scoping happens server-side, resolved
+from the caller's own token (`server/store.js`'s `accountForToken`), never
+trusted from anything the client sends - the request body for
+`POST /api/published` is still just the `PublishedSchedule` object of
+section 44, with nowhere in it to name a place at all, so there is no field
+one editor could set to publish into a different one's schedule even by
+mistake. `published`, one object under section 42's design, became one
+object *per place* (`server/db.js`'s `published_schedules` table, keyed on
+`place_id`) for exactly this reason.
+
+Only an admin creates a place (`AdminScreen`'s new "Places" panel, a name
+and a kind, `POST /api/places`); registering into one is the only choice
+left to anyone else, made from a `<select>` on the registration card
+(`LoginScreen.tsx`) populated by `GET /api/places` - public on purpose,
+since a visitor has to see the list before they have an account to see it
+with. A fresh deployment has no places and no accounts but `admin`
+(section 48), so the very first thing an admin does with a new one is
+create the place their own institution will actually use.
+
+## 47. Two new roles, and the calendar rendering they share
+
+Section 41's "a viewer - a student - sees one page" became two roles
+instead of one, because "everyone who cannot edit" turned out to mean two
+different questions once more than one course's worth of exams was in play:
+a **student** wants the exams that apply to *their* study program and year;
+a **teacher** wants the exams *they* teach, which is not the same slice at
+all - a teacher of a required first-year course and a teacher of a
+third-year elective see almost entirely different calendars from the same
+published schedule.
+
+Both are filters over the exact same `PublishedSchedule` section 44 already
+built, not two different features: `StudentView` filters by
+`account.program` and `account.year` matched against `exam.slots`,
+`TeacherScreen` filters by `account.instructorNames` matched
+case-insensitively against `exam.course.instructor`. A student supplies
+their program and year themselves at registration, since only they know it;
+a teacher supplies the instructor name they register under themselves too
+(matched exactly, no admin-assisted linking step) - both self-service,
+neither behind the approval gate section 43 built for editors specifically,
+because a read-only account cannot do anything an approval would be
+protecting.
+
+Everything below the filter - the week calendar, the room and time tooltip,
+the highlight legend, the exam chip itself - was one component doing the
+same work twice with two different data feeds, so it was pulled out once
+into `components/PublishedScheduleCalendar.tsx`, taking `published` and a
+`filterExam` predicate. Both `StudentView` and `TeacherScreen` are now thin
+wrappers around it: fetch the schedule, decide the predicate, hand both to
+the shared component - the legend itself changed along the way too, now
+built from whichever programs remain *after* filtering rather than from the
+place's whole `selectedPrograms` list, so a teacher whose courses only touch
+two of a place's five study programs sees a legend of exactly two, not five.
+
+## 48. From a JSON file to Postgres
+
+Section 42's `server/data.json` - "a classroom's worth of accounts is small
+enough" - stopped being true the moment a place could mean a real
+institution's worth of them, and stopped being safe regardless once a
+production deployment's filesystem could not be trusted to survive a
+redeploy at all (many hosts, Render included, treat a service's own disk as
+disposable). `server/db.js` replaces it with Postgres: four tables
+(`places`, `accounts`, `sessions`, `published_schedules`), a schema created
+automatically on boot (`migrate`, plain `CREATE TABLE IF NOT EXISTS`, no
+migration framework - the schema has only grown once so far, and a real
+migration tool can wait until it needs to grow a second time in a way that
+is not simply additive). Every function in `server/store.js` that used to
+read and write the file synchronously now runs one SQL query, and every
+route in `server/index.js` that called it now `await`s it - a mechanical
+change everywhere, save one place it was not: `sessions` moved from an
+in-memory `Map` (section 42's "forgotten on restart, for the same reason"
+the collaboration rooms are) into its own table, because losing every
+signed-in session on every redeploy, which a production server should
+expect to happen far more often than a classroom server ever restarted, is
+a real cost a demo never had to pay.
+
+A fresh database seeds exactly one account, `admin` (`ensureBootstrapAdmin`)
+- not the four fixed demo accounts of section 45's walkthrough, which now
+only exist behind `SEED_DEMO_ACCOUNTS=true`, explicitly documented as never
+for production, since their passwords are public (they are in this very
+document). `admin`'s own password comes from `ADMIN_PASSWORD`, or, if that
+is unset, a random one generated and logged exactly once at startup
+(`server/log.js`, section 51) - printed nowhere else, on purpose, so there
+is never a second copy of it sitting in a file or an environment variable
+history to leak.
+
+## 49. Hardening: sessions, lockout, rate limiting, and a password reset that actually resets something
+
+Section 41's parenthetical - "no rate limiting, no password reset, a session
+token that lives only until the server restarts" - was three separate gaps,
+closed three separate ways:
+
+* **Sessions expire.** A token's `expires_at` slides forward by 24 hours on
+  every authenticated request (`accountForToken`'s `UPDATE ... RETURNING`,
+  one query doing the check and the renewal together); idle for a day and
+  the next request finds nothing to renew, the same as if the account had
+  been signed out.
+* **An account locks out.** Five wrong passwords in a row
+  (`recordFailedLogin`) sets `locked_until` fifteen minutes out; a login
+  attempt against a locked account is refused with a distinct `"locked"`
+  reason before the password is even checked, and a correct login
+  (`recordSuccessfulLogin`) clears the counter back to zero.
+* **Login and registration are rate-limited per IP**
+  (`server/rateLimit.js`), independent of the per-account lockout above - a
+  lockout stops someone guessing *one* account's password; the rate limit
+  stops someone trying many usernames against the same weak password, which
+  a per-account counter alone would never catch.
+
+A password reset (`AdminScreen`'s "Reset password" button,
+`POST /api/accounts/:username/reset-password`, admin-only) generates a
+random temporary password, shown to the admin exactly once to relay out of
+band - there is still no email sending anywhere in this project, the same
+choice section 41 already made and one this part did not revisit - and sets
+`must_change_password`, checked on every subsequent sign-in. `AppGate.tsx`
+now checks that flag before routing to any role's screen at all, showing a
+new `ChangePasswordScreen` instead; `POST /api/change-password` verifies the
+temporary password, sets a new one, and revokes every session the account
+held (`revokeAllSessions`) - including the one the change request itself was
+made with, so the natural next step is signing back in with the new
+password, not continuing on a session the server has already forgotten.
+
+## 50. Deploying for real: Docker, Render, and the constraint that comes with it
+
+`server/Dockerfile` is the one artifact everything downstream depends on: a
+plain `node:20-alpine` image, `npm ci --omit=dev`, the server's own files
+copied in by name, a `HEALTHCHECK` hitting the same `/healthz` route
+`render.yaml`'s `healthCheckPath` also points at. `render.yaml` is a Render
+Blueprint - the database, the server (built from that Dockerfile), and the
+web app (a static build of `web/`) declared as one file, so connecting the
+repository creates the whole deployment in one pass; `DEPLOYMENT.md` is the
+manual half a file cannot do - the Render account, the secrets a
+`sync: false` value only prompts for once, wiring the two services' URLs
+into each other after Render assigns them, a domain.
+
+One constraint follows straight from section 46's own design, not from
+anything new: `render.yaml` pins `numInstances: 1`. The collaboration
+relay's room state (section 16.2's `Map`s of exam dates and locks) still
+lives in one process's own memory, exactly as it always has - a second
+instance would simply not see the first one's rooms, so two people in "the
+same" room could land on different instances and never see each other's
+moves at all. Rate limiting does not have this problem any more (below); the
+collaboration relay does, and fixing it is a real distributed-systems
+project - typically Redis pub/sub relaying a lock or a move between
+instances, since a client's WebSocket connection is pinned to whichever one
+it happened to land on - not attempted here, and not needed at the one
+place this is currently running.
+
+The web app itself gained one small dependency on where it is deployed that
+local development never had: `auth/api.ts`'s `baseUrl` and
+`CollabBar.tsx`'s `defaultServerUrl` used to assume the server sits on the
+same host as the web app, just a different port - true on `localhost`, false
+the moment they are two separate Render services with two separate
+hostnames. Both now read a build-time Vite variable (`VITE_API_URL`,
+`VITE_WS_URL`) first, falling back to the same-host guess only when it is
+unset - which is why `render.yaml`'s web service declares both as
+`sync: false` values to be filled in once the server's real URL exists.
+
+## 51. Logs an operator can use, and error reporting that costs nothing to leave off
+
+Every `console.log`/`console.warn`/`console.error` in `server/index.js`
+became one call into `server/log.js` instead - one JSON object per line
+(`time`, `level`, `message`, and whatever else that event carries, like a
+request's path or an account's username), because a person reading this
+server's logs from now on is far more likely to be a log viewer filtering on
+a field than someone scrolling a terminal by eye.
+
+`server/errorTracking.js` wraps every place an error already reached a
+`catch` (a bad request, a route handler that threw, the process's own
+`uncaughtException` and `unhandledRejection` - neither previously handled at
+all) in one function, `captureError`, that always logs and, only if
+`SENTRY_DSN` is set, also reports to Sentry. Unset is the default and a
+fully supported one, not a degraded mode - nothing about running this server
+requires an account with Sentry, the same design section 41 already used for
+"no email sending" and section 49 for "no HTTPS in this code:" a real
+capability, opt-in, with the software working exactly as well without it as
+a smaller project that never needed it at all.
+
+## 52. What was checked
+
+* **The whole server rewrite, against a real database, not a mock** - a new
+  `server/test/api.test.js` (Node's own `node:test`) runs a full
+  register-approve-publish-read cycle, confirms a teacher or student
+  registered into one place gets `null` back from a different place's
+  `/api/published` rather than that place's own schedule, and confirms a
+  password reset both revokes the session that was active before it and
+  forces `must_change_password` on the next sign-in - each against a real
+  Postgres, started fresh for the run, never mocked. This caught a real bug
+  during development: the rate limiter counting every `/api/register` call
+  the suite itself made toward the same production limit real traffic would
+  share, tripping mid-suite on the sixth call - not a bug in the limiter,
+  which was doing exactly its job, but a reason the limits are now
+  overridable by environment variable for a test run specifically
+  (`REGISTER_RATE_LIMIT`, `LOGIN_RATE_LIMIT`), left at their production
+  defaults everywhere else.
+* **The server's own Docker image, run for real** - built from
+  `server/Dockerfile`, connected over an actual Docker network to a
+  throwaway Postgres and a throwaway Redis container (not `localhost`
+  shortcuts), confirmed it migrates its schema, creates the bootstrap admin,
+  answers `/healthz`, and authenticates that admin - then confirmed a
+  first-boot race (the server starting a beat before Postgres was truly
+  ready to accept connections) crashes the process rather than retrying
+  forever, and that restarting the container the way a real platform's
+  supervisor would recovers cleanly.
+* **Rate limiting's Redis path specifically** - run against a real Redis
+  container with `REGISTER_RATE_LIMIT` lowered to 3: the first three
+  registration attempts succeeded or failed on their own merits, the fourth
+  was refused with 429 before it was even validated, and `redis-cli KEYS`
+  confirmed the counter genuinely lived in Redis rather than the in-memory
+  fallback silently taking over.
+* **The full role and place walkthrough in the browser** - registered a
+  student into the seeded place and confirmed their calendar showed only
+  the courses of their own program and year; signed in as the seeded
+  teacher and confirmed a visibly different set of exams, matching that
+  teacher's own instructor name; created a second place from the admin
+  screen and registered a teacher into it, confirming their published
+  schedule read back `null` rather than the first place's data, matching
+  what the API-level test above already established.
+* `npx tsc -b`, `npm run build` and the Python suite all stayed green
+  throughout, and `.github/workflows/ci.yml` gained a third job running
+  `server/test/api.test.js` against a real Postgres service container -
+  confirmed passing in GitHub's own Actions runner, not only locally.
 
