@@ -4,6 +4,5 @@ output/
 node_modules/
 dist/
 *.tsbuildinfo
-server/data.json
 *.log
 .env

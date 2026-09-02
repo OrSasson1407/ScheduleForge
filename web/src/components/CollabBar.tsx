@@ -13,8 +13,9 @@ import { Role, User } from "../collab/types";
 import { TranslationKey } from "../i18n/types";
 import { useTranslation } from "../i18n/LanguageContext";
 
+/** `VITE_WS_URL` is a build-time value - see `auth/api.ts`'s `baseUrl` for why one is needed at all in production. */
 function defaultServerUrl(): string {
-  return `ws://${window.location.hostname}:8787`;
+  return import.meta.env.VITE_WS_URL || `ws://${window.location.hostname}:8787`;
 }
 
 interface Props {

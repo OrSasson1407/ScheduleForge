@@ -10,7 +10,7 @@
 
 import { ReactNode, createContext, useCallback, useContext, useEffect, useState } from "react";
 import { Account } from "./users";
-import { RegisterResult, fetchMe, login as apiLogin, register as apiRegister } from "./api";
+import { RegisterInput, RegisterResult, fetchMe, login as apiLogin, register as apiRegister } from "./api";
 
 const STORAGE_KEY = "scheduleforge.v3.session";
 
@@ -39,7 +39,7 @@ export interface AuthContextValue {
   /** True while `/api/me` is still resolving the token this tab was restored with. */
   restoring: boolean;
   login: (username: string, password: string) => Promise<LoginOutcome>;
-  register: (username: string, password: string, displayName: string) => Promise<RegisterResult>;
+  register: (input: RegisterInput) => Promise<RegisterResult>;
   logout: () => void;
 }
 
@@ -82,10 +82,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     return "ok";
   }, []);
 
-  const register = useCallback(
-    (username: string, password: string, displayName: string) => apiRegister(username, password, displayName),
-    []
-  );
+  const register = useCallback((input: RegisterInput) => apiRegister(input), []);
 
   const logout = useCallback(() => {
     setToken(null);

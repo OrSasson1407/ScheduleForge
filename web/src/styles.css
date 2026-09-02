@@ -2229,7 +2229,8 @@ input[type="date"]:focus-visible {
   color: var(--muted);
 }
 
-.login-field input {
+.login-field input,
+.login-field select {
   background: var(--surface);
   border: 1px solid var(--line);
   color: var(--ink);
@@ -2237,9 +2238,19 @@ input[type="date"]:focus-visible {
   font: 400 14px var(--font);
 }
 
-.login-field input:focus-visible {
+.login-field input:focus-visible,
+.login-field select:focus-visible {
   outline: 2px solid var(--accent);
   outline-offset: 1px;
+}
+
+.login-field-row {
+  display: flex;
+  gap: 12px;
+}
+
+.login-field-row .login-field {
+  flex: 1;
 }
 
 .login-demo {
@@ -2284,4 +2295,29 @@ input[type="date"]:focus-visible {
 .admin-editor-actions {
   display: flex;
   gap: 8px;
+}
+
+.admin-place-form {
+  display: flex;
+  gap: 8px;
+  margin-top: 12px;
+  flex-wrap: wrap;
+}
+
+.admin-place-form input[type="text"] {
+  flex: 1;
+  min-width: 160px;
+  background: var(--surface);
+  border: 1px solid var(--line);
+  color: var(--ink);
+  padding: 8px 12px;
+  font: 400 14px var(--font);
+}
+
+.admin-place-form select {
+  background: var(--surface);
+  border: 1px solid var(--line);
+  color: var(--ink);
+  padding: 8px 12px;
+  font: 400 14px var(--font);
 }

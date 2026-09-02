@@ -11,8 +11,10 @@
 import { useTranslation } from "./i18n/LanguageContext";
 import { AuthProvider, useAuth } from "./auth/AuthContext";
 import { AdminScreen } from "./screens/AdminScreen";
+import { ChangePasswordScreen } from "./screens/ChangePasswordScreen";
 import { LoginScreen } from "./screens/LoginScreen";
 import { StudentView } from "./screens/StudentView";
+import { TeacherScreen } from "./screens/TeacherScreen";
 import App from "./App";
 
 function Gate() {
@@ -30,8 +32,10 @@ function Gate() {
   }
 
   if (!account) return <LoginScreen />;
+  if (account.mustChangePassword) return <ChangePasswordScreen />;
   if (account.role === "admin") return <AdminScreen />;
-  if (account.role === "viewer") return <StudentView />;
+  if (account.role === "teacher") return <TeacherScreen />;
+  if (account.role === "student") return <StudentView />;
   return <App />;
 }
 

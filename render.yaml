@@ -1,0 +1,65 @@
+# Render Blueprint (https://render.com/docs/blueprint-spec): the whole
+# production deployment as one file, so "connect this repo" is most of the
+# setup. See DEPLOYMENT.md for the manual steps a file cannot do for you
+# (creating the Render account, connecting GitHub, filling in the five
+# `sync: false` values below, pointing a domain at it).
+
+databases:
+  - name: scheduleforge-db
+    databaseName: scheduleforge
+    user: scheduleforge
+
+services:
+  - name: scheduleforge-server
+    type: web
+    runtime: docker
+    dockerfilePath: ./server/Dockerfile
+    dockerContext: ./server
+    healthCheckPath: /healthz
+    # The collaboration relay keeps its room state (who is editing what) in
+    # this one process's own memory, not in the database or Redis - a second
+    # instance would not see the first one's rooms at all. Raising this
+    # requires moving that state to something shared first (server/index.js's
+    # header comment says where); until then, this has to stay exactly 1.
+    numInstances: 1
+    envVars:
+      - key: DATABASE_URL
+        fromDatabase:
+          name: scheduleforge-db
+          property: connectionString
+      # The web static site's real URL, filled in once it exists (Render
+      # assigns it on first deploy) - see DEPLOYMENT.md step 4.
+      - key: ALLOWED_ORIGIN
+        value: ""
+        sync: false
+      # Optional: if left blank, the server generates one at first boot and
+      # prints it once to this service's own logs - see DEPLOYMENT.md step 5.
+      - key: ADMIN_PASSWORD
+        value: ""
+        sync: false
+      - key: SEED_DEMO_ACCOUNTS
+        value: "false"
+      # Optional - see DEPLOYMENT.md's "Error tracking and uptime" section.
+      # Leaving this blank is fully supported; nothing degrades without it.
+      - key: SENTRY_DSN
+        value: ""
+        sync: false
+
+  - name: scheduleforge-web
+    type: web
+    runtime: static
+    buildCommand: cd web && npm ci && npm run build
+    staticPublishPath: web/dist
+    envVars:
+      # Both baked in at build time (Vite), so they have to be set *before*
+      # this service's first successful build - and since Render only
+      # assigns scheduleforge-server's URL once it exists, that means: let
+      # this first build fail on API calls, come back and fill these in with
+      # the server's real URL, then trigger a manual redeploy. DEPLOYMENT.md
+      # step 4 walks through it.
+      - key: VITE_API_URL
+        value: ""
+        sync: false
+      - key: VITE_WS_URL
+        value: ""
+        sync: false

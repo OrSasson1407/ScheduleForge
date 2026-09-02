@@ -160,7 +160,12 @@ draggable - enforced both on the screen itself and, independently, by the
 relay server, so it holds even for a viewer that tries to bypass their own
 browser. Everyone in the room sees who is an editor and who is a viewer.
 
-This needs the small server of `server/`, run separately:
+This needs the small server of `server/`, which now keeps its data in a real
+Postgres database rather than a file, so it needs one reachable via
+`DATABASE_URL` even for local use - `DEPLOYMENT.md`'s "Local development"
+section has the one-line Docker command for a throwaway local database and
+the full environment variable list (`server/.env.example`). Once that is
+set:
 
 ```bash
 cd server
@@ -184,30 +189,53 @@ header, gives the server address (the default is right for everyone on the
 same machine or network as the server), agrees on a room code out loud, picks
 a name and picks whether to join as an editor or a viewer. A room lives only
 in memory, so restarting the server forgets it - enough for one classroom
-session. The accounts and the published schedule the next section describes
-are not room state and do persist across a restart, kept on disk in
-`server/data.json`.
+session. The accounts, places and published schedules the next section
+describes are not room state and do persist across a restart, in the
+database.
 
-## Accounts and roles
+## Accounts, places and roles
 
-The whole application sits behind a sign-in screen, and who signs in decides
-what they see: an **editor** sees everything described above, unchanged; a
-**viewer** (a student) sees exactly one read-only page - the exam schedule an
-editor chose to publish, with a "Publish for students" button on the Output
-screen; an **admin** sees exactly one page too - every editor account that has
-registered, pending ones first, each with an Approve / Reject button. A new
-instructor registers from a link on the sign-in card and stays **pending**,
-unable to sign in, until an admin approves them - and since that approval has
-to be visible on whichever computer the new instructor signs in from next,
-which is not necessarily the one they registered on, it is the server that
-holds the account, not either browser's own storage.
+The whole application sits behind a sign-in screen. An admin creates
+**places** - a university, a high school, a college, anything - and every
+other account belongs to exactly one. Who signs in, and which place they
+belong to, decides what they see:
 
-Three accounts exist from a fresh `server/data.json`: `admin` / `admin123`,
-`editor` / `editor123`, and `student` / `student123`. This is still not a
-production authentication system - no HTTPS, no rate limiting, no password
-reset, and a session token lasts only until the server restarts - see
-`DESIGN.md`, part IX for the full design and the reasoning behind each of
-those limits.
+- **editor** - everything described above, unchanged, scoped to their own
+  place; publishing only ever reaches that place's students and teachers.
+- **teacher** - one read-only page: every exam they teach, matched by the
+  instructor name they registered with.
+- **student** - one read-only page: every exam that applies to the study
+  program and year they registered with.
+- **admin** - one page: every place (create more from here), and every
+  editor account that has registered, pending ones first, with Approve /
+  Reject / Reset password actions. A teacher or student needs no approval to
+  start using their account, since there is nothing a read-only account
+  could do that approval would be protecting.
+
+A new editor stays **pending**, unable to sign in, until an admin approves
+them - and since that approval has to be visible on whichever computer the
+new editor signs in from next, which is not necessarily the one they
+registered on, it is the server that holds every account, not either
+browser's own storage.
+
+A fresh database has exactly one account, `admin`, whose password is set the
+first time the server starts (`DEPLOYMENT.md` step 5). Set
+`SEED_DEMO_ACCOUNTS=true` instead for a classroom trial and it seeds four
+fixed demo accounts - `admin`/`admin123`, `editor`/`editor123`,
+`teacher`/`teacher123`, `student`/`student123` - never do this in production,
+since those passwords are public (they're in this README).
+
+Real hardening now backs this: passwords are hashed, a login is rate-limited
+and an account locks out for 15 minutes after 5 wrong passwords in a row, a
+session expires after 24 hours of inactivity, and an admin can reset anyone's
+password (which forces a new one to be chosen on next sign-in and signs that
+account out everywhere). What is still missing - HTTPS is your deployment's
+job, not this code's (`DEPLOYMENT.md`), and there is still no self-service
+"forgot password" email flow, only an admin-mediated reset - is listed in
+full in `DESIGN.md`, part IX.
+
+**Deploying this for real, past a laptop on one network**: see
+`DEPLOYMENT.md`.
 
 ---
 
