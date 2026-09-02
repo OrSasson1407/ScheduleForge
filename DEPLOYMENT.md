@@ -57,15 +57,31 @@ Render to see your GitHub repositories (you can limit it to just this one).
 **2. New Blueprint.**
 Dashboard → **New** → **Blueprint** → pick this repository. Render reads
 `render.yaml` and shows the three services it is about to create
-(`scheduleforge-db`, `scheduleforge-server`, `scheduleforge-web`).
+(`scheduleforge-db`, `scheduleforge-server`, `scheduleforge-web`), both
+compute ones (`scheduleforge-db`, `scheduleforge-server`) pinned to the
+`free` plan explicitly in the file - Render defaults a new service to a
+*paid* starter plan if a Blueprint does not say otherwise, so this is not
+optional to get the $0/month tier. The free Postgres database still expires
+30 days after creation regardless (a 14-day grace period to upgrade before
+Render deletes it, with email warnings before both) - fine for standing this
+up and trying it, not something to leave unattended long-term without either
+upgrading it or planning to recreate it.
 
-**3. Fill in the prompted secrets, then deploy anyway.**
-Render will ask for `ALLOWED_ORIGIN`, `ADMIN_PASSWORD`, `VITE_API_URL` and
-`VITE_WS_URL` up front (they are marked `sync: false` in `render.yaml`
+**3. Add a card, fill in the prompted secrets, then deploy anyway.**
+Even on the free plan, Render asks for payment information on file before a
+Blueprint with a database will proceed - a real requirement, not a bug in
+this repo's config, and one only you can complete (entering payment details
+is not something to hand to an AI assistant, including this one). It also
+asks for `ALLOWED_ORIGIN`, `ADMIN_PASSWORD`, `SENTRY_DSN`, `VITE_API_URL` and
+`VITE_WS_URL` up front (each marked `sync: false` in `render.yaml`
 specifically so you're asked, rather than committed to the repo). You do
-not know the real URLs yet at this point - **leave them blank** and deploy;
-the first build of the web app will fail to reach the server, and that is
-expected. Fix it in the next step.
+not know the real URLs yet at this point - **leave `ALLOWED_ORIGIN`,
+`VITE_API_URL` and `VITE_WS_URL` blank** and deploy anyway; the first build
+of the web app will fail to reach the server, and that is expected. Fix it
+in the next step. `SENTRY_DSN` can stay blank indefinitely (see "Error
+tracking and uptime alerting" below); set `ADMIN_PASSWORD` now if you want
+to choose it yourself rather than read a generated one out of the logs
+afterward.
 
 **4. Wire the two services together.**
 Once both services exist, Render has assigned each a URL, something like:

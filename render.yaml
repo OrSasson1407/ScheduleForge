@@ -8,6 +8,12 @@ databases:
   - name: scheduleforge-db
     databaseName: scheduleforge
     user: scheduleforge
+    # Render defaults a new database to a paid plan (0.1c-256mb) if this is
+    # left out - free is a real $0/month tier, not the default, and has to
+    # be named explicitly. Render's free Postgres is also time-limited (see
+    # your dashboard for the current window) - fine for trying this out, not
+    # for something meant to keep running unattended for good.
+    plan: free
 
 services:
   - name: scheduleforge-server
@@ -16,6 +22,9 @@ services:
     dockerfilePath: ./server/Dockerfile
     dockerContext: ./server
     healthCheckPath: /healthz
+    # Same reasoning as the database above: omitting this defaults to a paid
+    # starter plan (0.5c-512mb), not free.
+    plan: free
     # The collaboration relay keeps its room state (who is editing what) in
     # this one process's own memory, not in the database or Redis - a second
     # instance would not see the first one's rooms at all. Raising this
