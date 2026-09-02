@@ -160,12 +160,13 @@ draggable - enforced both on the screen itself and, independently, by the
 relay server, so it holds even for a viewer that tries to bypass their own
 browser. Everyone in the room sees who is an editor and who is a viewer.
 
-This needs the small server of `server/`, which now keeps its data in a real
-Postgres database rather than a file, so it needs one reachable via
-`DATABASE_URL` even for local use - `DEPLOYMENT.md`'s "Local development"
-section has the one-line Docker command for a throwaway local database and
-the full environment variable list (`server/.env.example`). Once that is
-set:
+This needs the small server of `server/`, which keeps its data in Firestore
+rather than a file - chosen specifically because its free tier is free
+indefinitely, no card, no expiration. For local development, that means the
+Firebase Local Emulator Suite rather than a real Firebase project;
+`DEPLOYMENT.md`'s "Local development" section has the setup (the Firebase
+CLI, a JVM) and the full environment variable list (`server/.env.example`).
+Once the emulator is running:
 
 ```bash
 cd server
@@ -219,9 +220,9 @@ registered on, it is the server that holds every account, not either
 browser's own storage.
 
 A fresh database has exactly one account, `admin`, whose password is set the
-first time the server starts (`DEPLOYMENT.md` step 5). Set
-`SEED_DEMO_ACCOUNTS=true` instead for a classroom trial and it seeds four
-fixed demo accounts - `admin`/`admin123`, `editor`/`editor123`,
+first time the server starts (`DEPLOYMENT.md`, "Deploying to Render" step
+5). Set `SEED_DEMO_ACCOUNTS=true` instead for a classroom trial and it seeds
+four fixed demo accounts - `admin`/`admin123`, `editor`/`editor123`,
 `teacher`/`teacher123`, `student`/`student123` - never do this in production,
 since those passwords are public (they're in this README).
 
@@ -232,10 +233,12 @@ password (which forces a new one to be chosen on next sign-in and signs that
 account out everywhere). What is still missing - HTTPS is your deployment's
 job, not this code's (`DEPLOYMENT.md`), and there is still no self-service
 "forgot password" email flow, only an admin-mediated reset - is listed in
-full in `DESIGN.md`, part IX.
+full in `DESIGN.md`, part X.
 
-**Deploying this for real, past a laptop on one network**: see
-`DEPLOYMENT.md`.
+**Deploying this for real, past a laptop on one network**: two accounts, not
+one - a Firebase project for the database (free, no card, no expiration)
+alongside the Render account that hosts the server and the web app.
+`DEPLOYMENT.md` has the full walkthrough for both, in order.
 
 ---
 
