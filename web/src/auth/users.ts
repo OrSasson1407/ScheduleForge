@@ -8,7 +8,8 @@
  * `server/index.js`'s header for what that server does and does not secure.
  */
 
-export type Role = "admin" | "editor" | "teacher" | "student";
+/** "admin" is the one global account (no `placeId`); "placeAdmin" is the same authority scoped to a single place. */
+export type Role = "admin" | "placeAdmin" | "editor" | "teacher" | "student";
 
 export interface Place {
   id: string;

@@ -44,6 +44,11 @@ services:
       # Leaving this blank is fully supported; nothing degrades without it.
       - key: SENTRY_DSN
         sync: false
+      # Optional - see DEPLOYMENT.md's "Forgot-password email" section. Left
+      # blank, a forgot-password link is only ever logged, never emailed -
+      # fine for trying the app out, not for anyone who actually needs it.
+      - key: RESEND_API_KEY
+        sync: false
 
   - name: scheduleforge-web
     type: web

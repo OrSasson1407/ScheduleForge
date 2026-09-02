@@ -23,7 +23,7 @@ import { useTranslation } from "../i18n/LanguageContext";
 
 export function ChangePasswordScreen() {
   const { t } = useTranslation();
-  const { token, logout } = useAuth();
+  const { logout } = useAuth();
   const [currentPassword, setCurrentPassword] = useState("");
   const [newPassword, setNewPassword] = useState("");
   const [error, setError] = useState<string | null>(null);
@@ -31,12 +31,13 @@ export function ChangePasswordScreen() {
 
   const submit = async (event: FormEvent) => {
     event.preventDefault();
-    if (!token) return;
     setBusy(true);
-    const outcome = await changePassword(token, currentPassword, newPassword);
+    const outcome = await changePassword(currentPassword, newPassword);
     setBusy(false);
     if (outcome === "ok") {
-      logout(); // the server already revoked this session; reflect that locally and return to sign-in
+      // The server already revoked this session; POST /api/logout below is mostly a formality
+      // (its own session is already gone) but still clears the cookie and local state cleanly.
+      await logout();
       return;
     }
     setError(

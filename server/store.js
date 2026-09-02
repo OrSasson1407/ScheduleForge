@@ -13,11 +13,11 @@
  * not secure.
  *
  * Collections: `places/{placeId}`, `accounts/{username}`,
- * `sessions/{token}`, `published/{placeId}`. An account's document ID is
- * its own username, so "does this username exist" is a single document
- * lookup rather than a query, and `.create()` (fails if the document
- * already exists) is what makes registering race-free without a SQL unique
- * constraint to fall back on.
+ * `sessions/{token}`, `published/{placeId}`, `passwordResets/{token}`. An
+ * account's document ID is its own username, so "does this username exist"
+ * is a single document lookup rather than a query, and `.create()` (fails if
+ * the document already exists) is what makes registering race-free without a
+ * SQL unique constraint to fall back on.
  */
 
 const crypto = require("crypto");
@@ -27,11 +27,16 @@ const LOCKOUT_THRESHOLD = 5;
 const LOCKOUT_MINUTES = 15;
 const SESSION_TTL_HOURS = 24;
 const FIRESTORE_ALREADY_EXISTS = 6;
+/** How many of an account's previous passwords `changePassword` refuses to reuse. */
+const PASSWORD_HISTORY_LENGTH = 5;
+/** How long a forgot-password link stays usable. */
+const PASSWORD_RESET_TTL_HOURS = 1;
 
 const accounts = () => db.collection("accounts");
 const places = () => db.collection("places");
 const sessions = () => db.collection("sessions");
 const published = () => db.collection("published");
+const passwordResets = () => db.collection("passwordResets");
 
 function hashPassword(password, salt = crypto.randomBytes(16).toString("hex")) {
   const hash = crypto.scryptSync(password, salt, 64).toString("hex");
@@ -71,6 +76,12 @@ async function findAccount(username) {
   return accountFromDoc(await accounts().doc(username).get());
 }
 
+/** Null for no match - callers must not reveal which case it was (see /api/forgot-password). */
+async function findAccountByEmail(email) {
+  const snapshot = await accounts().where("email", "==", email).limit(1).get();
+  return snapshot.empty ? null : accountFromDoc(snapshot.docs[0]);
+}
+
 async function findPlace(placeId) {
   const doc = await places().doc(placeId).get();
   return doc.exists ? { id: doc.id, ...doc.data() } : null;
@@ -99,11 +110,26 @@ async function recordSuccessfulLogin(username) {
   await accounts().doc(username).update({ failedAttempts: 0, lockedUntil: null });
 }
 
-async function createSession(username) {
+/**
+ * `id` is a second, separate random value from the token itself: the session
+ * list (`listSessions`) has to show the caller something to identify and
+ * revoke a session by, but the token is a live credential - handing it back
+ * in a list response would let anyone who can read their own session list
+ * reconstruct a bearer credential for a session that is not "the current
+ * request", which the cookie-only transport is specifically meant to avoid.
+ */
+async function createSession(username, userAgent) {
   const token = crypto.randomUUID();
+  const id = crypto.randomUUID();
   await sessions()
     .doc(token)
-    .set({ username, expiresAt: new Date(Date.now() + SESSION_TTL_HOURS * 3600_000).toISOString() });
+    .set({
+      id,
+      username,
+      userAgent: userAgent || "unknown",
+      createdAt: new Date().toISOString(),
+      expiresAt: new Date(Date.now() + SESSION_TTL_HOURS * 3600_000).toISOString(),
+    });
   return token;
 }
 
@@ -125,6 +151,30 @@ async function deleteSession(token) {
   await sessions().doc(token).delete();
 }
 
+/** The session's own `id` (not the token itself - see `createSession`), for marking "this device" in the session list. Null for an expired or unknown token, the same as `accountForToken`. */
+async function sessionIdFor(token) {
+  const doc = await sessions().doc(token).get();
+  return doc.exists ? doc.data().id : null;
+}
+
+/** Every active session of an account, newest first - never the token itself, only what a person recognizes their own device by. */
+async function listSessions(username) {
+  const snapshot = await sessions().where("username", "==", username).get();
+  return snapshot.docs
+    .map((doc) => doc.data())
+    .filter((data) => new Date(data.expiresAt) > new Date())
+    .map((data) => ({ id: data.id, userAgent: data.userAgent, createdAt: data.createdAt }))
+    .sort((a, b) => b.createdAt.localeCompare(a.createdAt));
+}
+
+/** Deletes one session by its public `id`, but only when it belongs to `username` - the ownership check that stops a user revoking a session that is not theirs. True if a session was actually removed. */
+async function revokeSession(username, id) {
+  const snapshot = await sessions().where("username", "==", username).where("id", "==", id).limit(1).get();
+  if (snapshot.empty) return false;
+  await snapshot.docs[0].ref.delete();
+  return true;
+}
+
 /** Signs an account out of every device it is currently signed in on - used after a password reset. */
 async function revokeAllSessions(username) {
   const snapshot = await sessions().where("username", "==", username).get();
@@ -134,6 +184,7 @@ async function revokeAllSessions(username) {
 }
 
 module.exports = {
+  SESSION_TTL_HOURS,
   hashPassword,
   verifyPassword,
   findAccount,
@@ -145,7 +196,11 @@ module.exports = {
   createSession,
   accountForToken,
   deleteSession,
+  sessionIdFor,
+  listSessions,
+  revokeSession,
   revokeAllSessions,
+  findAccountByEmail,
 
   async listPlaces() {
     const snapshot = await places().get();
@@ -160,28 +215,60 @@ module.exports = {
     return { id, name, kind };
   },
 
-  async listAccounts() {
-    const snapshot = await accounts().get();
+  /** Every account, or - for a place admin - only the ones that belong to `placeId`. */
+  async listAccounts(placeId) {
+    const query = placeId ? accounts().where("placeId", "==", placeId) : accounts();
+    const snapshot = await query.get();
     return snapshot.docs
       .map((doc) => publicAccount(accountFromDoc(doc)))
       .sort((a, b) => a.username.localeCompare(b.username));
   },
 
   /** `role` is "editor", "teacher" or "student" - never "admin", which nobody registers into. */
-  async register(username, password, displayName, role, placeId, extra) {
+  async register(username, password, displayName, role, placeId, email, extra) {
     if (!(await findPlace(placeId))) return false;
     const account = {
       password: hashPassword(password),
       displayName,
       role,
       placeId,
+      email,
       status: role === "editor" ? "pending" : "approved",
       failedAttempts: 0,
       lockedUntil: null,
       mustChangePassword: false,
+      previousPasswords: [],
       instructorNames: role === "teacher" ? extra?.instructorNames ?? [] : undefined,
       program: role === "student" ? extra?.program ?? "" : undefined,
       year: role === "student" ? extra?.year ?? 1 : undefined,
+    };
+    try {
+      await accounts().doc(username).create(account);
+      return true;
+    } catch (error) {
+      if (error.code === FIRESTORE_ALREADY_EXISTS) return false;
+      throw error;
+    }
+  },
+
+  /**
+   * A `placeAdmin` account, scoped to one place - only the global admin can
+   * create one (`server/index.js`'s route checks that, not this function).
+   * Unlike `register`, there is no pending status: an admin creating another
+   * admin does not need to approve themselves.
+   */
+  async createPlaceAdmin(username, password, displayName, placeId) {
+    if (!(await findPlace(placeId))) return false;
+    const account = {
+      password: hashPassword(password),
+      displayName,
+      role: "placeAdmin",
+      placeId,
+      status: "approved",
+      failedAttempts: 0,
+      lockedUntil: null,
+      mustChangePassword: false,
+      previousPasswords: [],
     };
     try {
       await accounts().doc(username).create(account);
@@ -229,9 +316,51 @@ module.exports = {
     await accounts().doc(username).update({ mustChangePassword: false });
   },
 
+  /**
+   * The outgoing password hash is pushed onto `previousPasswords` (newest
+   * first, capped at `PASSWORD_HISTORY_LENGTH`) before it is overwritten, so
+   * a later change can refuse to let this exact password come back - see
+   * `server/passwordPolicy.js`'s `wasUsedBefore`, checked by the caller
+   * before this is ever reached.
+   */
   async changePassword(username, newPassword) {
-    await accounts().doc(username).update({ password: hashPassword(newPassword), mustChangePassword: false });
+    const account = await findAccount(username);
+    const previousPasswords = [account.password, ...(account.previousPasswords ?? [])].slice(
+      0,
+      PASSWORD_HISTORY_LENGTH
+    );
+    await accounts().doc(username).update({
+      password: hashPassword(newPassword),
+      mustChangePassword: false,
+      previousPasswords,
+    });
     await revokeAllSessions(username);
+  },
+
+  /** A one-hour, single-use reset link's token for `username`, for `sendPasswordResetEmail` (`server/email.js`) to mail out. */
+  async createPasswordReset(username) {
+    const token = crypto.randomUUID();
+    await passwordResets()
+      .doc(token)
+      .set({
+        username,
+        used: false,
+        expiresAt: new Date(Date.now() + PASSWORD_RESET_TTL_HOURS * 3600_000).toISOString(),
+      });
+    return token;
+  },
+
+  /** The username a reset token is for, marking it used in the same breath so it cannot be replayed - or null for an unknown, expired or already-used one. */
+  async consumePasswordReset(token) {
+    const ref = passwordResets().doc(token);
+    return db.runTransaction(async (tx) => {
+      const doc = await tx.get(ref);
+      if (!doc.exists) return null;
+      const data = doc.data();
+      if (data.used || new Date(data.expiresAt) <= new Date()) return null;
+      tx.update(ref, { used: true });
+      return data.username;
+    });
   },
 
   async getPublished(placeId) {
@@ -262,6 +391,7 @@ module.exports = {
         failedAttempts: 0,
         lockedUntil: null,
         mustChangePassword: false,
+        previousPasswords: [],
       });
     } catch (error) {
       if (error.code === FIRESTORE_ALREADY_EXISTS) return null; // lost a startup race with another instance; fine
@@ -291,6 +421,7 @@ module.exports = {
         failedAttempts: 0,
         lockedUntil: null,
         mustChangePassword: false,
+        previousPasswords: [],
         instructorNames,
         program,
         year,

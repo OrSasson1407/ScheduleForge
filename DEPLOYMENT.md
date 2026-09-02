@@ -182,6 +182,26 @@ match wherever the web app is actually served from.
   Firebase console's current options before relying on any particular
   backup mechanism being active for you.
 
+## Forgot-password email
+
+Optional, the same shape as the two integrations below it: an account with
+someone else, one environment variable, nothing to check into this repo.
+Left unset, a "forgot password" request still works end to end in every way
+except the actual emailing - the reset link is written to this service's own
+logs instead (`server/email.js`), which is genuinely fine for trying the app
+out or for a class where an admin is comfortable resetting passwords by
+hand, but not for real self-service use.
+
+To turn on the real email: [sign up at resend.com](https://resend.com)
+(their free tier - 3,000 emails/month - is far more than this app will ever
+send), create an API key, and set `RESEND_API_KEY` on `scheduleforge-server`
+(Render's dashboard, or `render.yaml`'s `sync: false` prompt on next
+Blueprint sync). Resend's own sandbox sending address
+(`onboarding@resend.dev`) works immediately with no domain setup, which is
+what `server/email.js` uses by default; set `RESEND_FROM_ADDRESS` too once
+you verify your own sending domain with Resend, so the email does not arrive
+from a stranger's address.
+
 ## Error tracking and uptime alerting
 
 Both need an account with someone else - nothing to check into this repo,

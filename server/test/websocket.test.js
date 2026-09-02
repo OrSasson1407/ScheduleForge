@@ -23,14 +23,17 @@ let serverModule;
 
 before(async () => {
   serverModule = require("../index.js");
-  for (let attempt = 0; attempt < 50; attempt++) {
+  // A cold Firestore emulator (or a loaded CI runner) can take well past 5
+  // seconds to answer its first request; 150 * 200ms gives it real headroom
+  // before this gives up.
+  for (let attempt = 0; attempt < 150; attempt++) {
     try {
       const res = await fetch(`${base}/healthz`);
       if (res.ok) return;
     } catch {
       /* not up yet */
     }
-    await new Promise((resolve) => setTimeout(resolve, 100));
+    await new Promise((resolve) => setTimeout(resolve, 200));
   }
   throw new Error("server did not become healthy in time");
 });

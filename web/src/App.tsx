@@ -22,6 +22,7 @@
  */
 
 import { useEffect, useMemo, useState } from "react";
+import { AccountMenu } from "./components/AccountMenu";
 import { CollabBar } from "./components/CollabBar";
 import { FilesSection } from "./components/FilesSection";
 import { Icon } from "./components/Icon";
@@ -63,7 +64,7 @@ interface Found {
 
 export default function App() {
   const { t } = useTranslation();
-  const { account, token, logout } = useAuth();
+  const { account } = useAuth();
   const restored = useMemo(loadStored, []);
   const [data, setData] = useState<StoredData>(restored ?? EMPTY_DATA);
   const [screen, setScreen] = useState<Screen>("input");
@@ -249,7 +250,7 @@ export default function App() {
   const onRedo = () => setHistoryAt((at) => Math.min(history.length - 1, at + 1));
 
   const onPublish = async (system: ExamSystem): Promise<boolean> => {
-    if (!token) return false;
+    if (!account) return false;
     const schedule: PublishedSchedule = {
       system,
       periods: data.periods,
@@ -260,7 +261,7 @@ export default function App() {
       settings: data.settings,
       publishedAt: new Date().toISOString(),
     };
-    return apiPublish(token, schedule);
+    return apiPublish(schedule);
   };
 
   return (
@@ -293,7 +294,6 @@ export default function App() {
           onConnect={(url, room, name, role) => collab.connect(url, room, name, role)}
           onDisconnect={collab.disconnect}
         />
-        <span className="t-data muted">{account?.displayName}</span>
         <LanguageToggle />
         <button
           type="button"
@@ -310,9 +310,7 @@ export default function App() {
         >
           <Icon name={data.theme === "dark" ? "light_mode" : "dark_mode"} />
         </button>
-        <button type="button" className="icon-button" title={t("auth.signOut")} onClick={logout}>
-          <Icon name="logout" />
-        </button>
+        <AccountMenu />
       </header>
 
       {screen === "input" && (

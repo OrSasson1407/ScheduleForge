@@ -19,10 +19,15 @@ process.env.LOGIN_RATE_LIMIT = "3";
 const base = `http://localhost:${process.env.PORT}`;
 const unique = () => crypto.randomBytes(4).toString("hex");
 
+function sessionCookieFrom(response) {
+  const setCookie = response.headers.get("set-cookie");
+  return setCookie ? setCookie.split(";")[0] : null;
+}
+
 async function api(path, options = {}) {
   const response = await fetch(`${base}${path}`, {
     ...options,
-    headers: { "Content-Type": "application/json", ...(options.headers ?? {}) },
+    headers: { "Content-Type": "application/json", "X-Requested-With": "ScheduleForge", ...(options.headers ?? {}) },
   });
   let body = null;
   try {
@@ -30,7 +35,7 @@ async function api(path, options = {}) {
   } catch {
     /* no body */
   }
-  return { status: response.status, body };
+  return { status: response.status, body, cookie: sessionCookieFrom(response) };
 }
 
 let serverModule;
@@ -38,14 +43,17 @@ let placeId;
 
 before(async () => {
   serverModule = require("../index.js");
-  for (let attempt = 0; attempt < 50; attempt++) {
+  // A cold Firestore emulator (or a loaded CI runner) can take well past 5
+  // seconds to answer its first request; 150 * 200ms gives it real headroom
+  // before this gives up.
+  for (let attempt = 0; attempt < 150; attempt++) {
     try {
       const res = await fetch(`${base}/healthz`);
       if (res.ok) break;
     } catch {
       /* not up yet */
     }
-    await new Promise((resolve) => setTimeout(resolve, 100));
+    await new Promise((resolve) => setTimeout(resolve, 200));
   }
   // A distinct X-Forwarded-For keeps this setup call from eating into the
   // login-rate-limit budget that "login is rate limited..." below needs to
@@ -57,7 +65,7 @@ before(async () => {
   });
   const place = await api("/api/places", {
     method: "POST",
-    headers: { Authorization: `Bearer ${login.body.token}` },
+    headers: { Cookie: login.cookie },
     body: JSON.stringify({ name: `Rate Limit Place ${unique()}`, kind: "university" }),
   });
   placeId = place.body.place.id;
@@ -75,6 +83,7 @@ test("registration is rate limited per IP after REGISTER_RATE_LIMIT attempts", a
       body: JSON.stringify({
         username: `burst-${unique()}`,
         password: "goodpassword",
+        email: `burst-${unique()}@example.com`,
         role: "student",
         placeId,
         program: "1",
@@ -124,6 +133,7 @@ test("an account locks out after enough failed login attempts, even under the lo
     body: JSON.stringify({
       username,
       password: "correct-password",
+      email: `${username}@example.com`,
       role: "student",
       placeId,
       program: "1",

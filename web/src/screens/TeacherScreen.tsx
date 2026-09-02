@@ -9,6 +9,7 @@
  */
 
 import { useCallback, useEffect, useState } from "react";
+import { AccountMenu } from "../components/AccountMenu";
 import { Icon } from "../components/Icon";
 import { LanguageToggle } from "../components/LanguageToggle";
 import { Logo } from "../components/Logo";
@@ -24,20 +25,19 @@ function normalize(name: string): string {
 
 export function TeacherScreen() {
   const { t } = useTranslation();
-  const { account, token, logout } = useAuth();
+  const { account } = useAuth();
   const [published, setPublished] = useState<PublishedSchedule | null>(null);
   const [loadState, setLoadState] = useState<"loading" | "ready" | "offline">("loading");
 
   const load = useCallback(async () => {
-    if (!token) return;
-    const result = await fetchPublished(token);
+    const result = await fetchPublished();
     if (result === undefined) {
       setLoadState("offline");
     } else {
       setPublished(result);
       setLoadState("ready");
     }
-  }, [token]);
+  }, []);
 
   useEffect(() => {
     load();
@@ -52,14 +52,11 @@ export function TeacherScreen() {
         </span>
       </div>
       <div className="header-spacer" />
-      <span className="t-data muted">{account?.displayName}</span>
       <button type="button" className="icon-button" title={t("studentView.refresh")} onClick={load}>
         <Icon name="refresh" />
       </button>
       <LanguageToggle />
-      <button type="button" className="icon-button" title={t("auth.signOut")} onClick={logout}>
-        <Icon name="logout" />
-      </button>
+      <AccountMenu />
     </header>
   );
 

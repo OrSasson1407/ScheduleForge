@@ -1913,6 +1913,45 @@ table.periods .numeric {
   color: var(--ink);
 }
 
+/* --- account menu --------------------------------------------------------- */
+
+.account-menu {
+  position: relative;
+  display: inline-flex;
+}
+
+.account-menu-trigger {
+  appearance: none;
+  border: none;
+  background: transparent;
+  color: var(--muted);
+  height: 40px;
+  padding: 0 10px;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.account-menu-trigger:hover {
+  color: var(--ink);
+  background: var(--surface-highest);
+}
+
+.account-menu-panel {
+  position: absolute;
+  top: 54px;
+  right: 0;
+  z-index: 45;
+  width: 280px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 14px;
+  background: var(--panel);
+  border: 1px solid var(--line);
+  box-shadow: var(--shadow-hard);
+}
+
 /* --- collaboration ------------------------------------------------------------ */
 
 .collab {
@@ -2051,7 +2090,8 @@ input[type="date"]:focus-visible {
   .program-legend,
   .output-footer,
   .notice,
-  .collab-panel {
+  .collab-panel,
+  .account-menu-panel {
     display: none !important;
   }
 
@@ -2171,7 +2211,8 @@ input[type="date"]:focus-visible {
     width: 100%;
   }
 
-  .collab-panel {
+  .collab-panel,
+  .account-menu-panel {
     right: -12px;
     width: calc(100vw - 40px);
     max-width: 320px;

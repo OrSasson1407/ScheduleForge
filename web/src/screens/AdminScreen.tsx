@@ -10,17 +10,27 @@
  */
 
 import { FormEvent, useCallback, useEffect, useState } from "react";
+import { AccountMenu } from "../components/AccountMenu";
 import { Icon } from "../components/Icon";
 import { LanguageToggle } from "../components/LanguageToggle";
 import { Logo } from "../components/Logo";
 import { useAuth } from "../auth/AuthContext";
 import { Account, Place } from "../auth/users";
-import { approveEditor, createPlace, fetchAccounts, fetchPlaces, rejectEditor, resetPassword } from "../auth/api";
+import {
+  approveEditor,
+  createPlace,
+  createPlaceAdmin,
+  fetchAccounts,
+  fetchPlaces,
+  rejectEditor,
+  resetPassword,
+} from "../auth/api";
 import { useTranslation } from "../i18n/LanguageContext";
 
 export function AdminScreen() {
   const { t } = useTranslation();
-  const { account, token, logout } = useAuth();
+  const { account } = useAuth();
+  const isGlobalAdmin = account?.role === "admin";
   const [accounts, setAccounts] = useState<Account[] | null>(null);
   const [places, setPlaces] = useState<Place[] | null>(null);
   const [offline, setOffline] = useState(false);
@@ -28,10 +38,14 @@ export function AdminScreen() {
   const [newPlaceName, setNewPlaceName] = useState("");
   const [newPlaceKind, setNewPlaceKind] = useState("university");
   const [resetNotice, setResetNotice] = useState<{ username: string; temp: string } | null>(null);
+  const [newAdminPlaceId, setNewAdminPlaceId] = useState("");
+  const [newAdminUsername, setNewAdminUsername] = useState("");
+  const [newAdminDisplayName, setNewAdminDisplayName] = useState("");
+  const [newAdminPassword, setNewAdminPassword] = useState("");
+  const [placeAdminNotice, setPlaceAdminNotice] = useState<"taken" | "failed" | null>(null);
 
   const load = useCallback(async () => {
-    if (!token) return;
-    const [foundAccounts, foundPlaces] = await Promise.all([fetchAccounts(token), fetchPlaces()]);
+    const [foundAccounts, foundPlaces] = await Promise.all([fetchAccounts(), fetchPlaces()]);
     if (foundAccounts && foundPlaces) {
       setAccounts(foundAccounts);
       setPlaces(foundPlaces);
@@ -39,45 +53,68 @@ export function AdminScreen() {
     } else {
       setOffline(true);
     }
-  }, [token]);
+  }, []);
 
   useEffect(() => {
     load();
   }, [load]);
+
+  useEffect(() => {
+    if (places && places.length && !newAdminPlaceId) setNewAdminPlaceId(places[0].id);
+  }, [places, newAdminPlaceId]);
 
   const placeName = (placeId: string | null): string =>
     places?.find((place) => place.id === placeId)?.name ?? t("admin.unknownPlace");
 
   const addPlace = async (event: FormEvent) => {
     event.preventDefault();
-    if (!token || !newPlaceName.trim()) return;
+    if (!newPlaceName.trim()) return;
     setBusy("__new_place__");
-    const created = await createPlace(token, newPlaceName.trim(), newPlaceKind);
+    const created = await createPlace(newPlaceName.trim(), newPlaceKind);
     if (created) setNewPlaceName("");
     await load();
     setBusy(null);
   };
 
+  const addPlaceAdmin = async (event: FormEvent) => {
+    event.preventDefault();
+    if (!newAdminPlaceId || !newAdminUsername.trim() || !newAdminPassword) return;
+    setBusy("__new_place_admin__");
+    setPlaceAdminNotice(null);
+    const outcome = await createPlaceAdmin(
+      newAdminPlaceId,
+      newAdminUsername.trim(),
+      newAdminPassword,
+      newAdminDisplayName.trim() || newAdminUsername.trim()
+    );
+    if (outcome === "ok") {
+      setNewAdminUsername("");
+      setNewAdminDisplayName("");
+      setNewAdminPassword("");
+      await load();
+    } else {
+      setPlaceAdminNotice(outcome);
+    }
+    setBusy(null);
+  };
+
   const approve = async (username: string) => {
-    if (!token) return;
     setBusy(username);
-    await approveEditor(token, username);
+    await approveEditor(username);
     await load();
     setBusy(null);
   };
 
   const reject = async (username: string) => {
-    if (!token) return;
     setBusy(username);
-    await rejectEditor(token, username);
+    await rejectEditor(username);
     await load();
     setBusy(null);
   };
 
   const reset = async (username: string) => {
-    if (!token) return;
     setBusy(username);
-    const temp = await resetPassword(token, username);
+    const temp = await resetPassword(username);
     if (temp) setResetNotice({ username, temp });
     setBusy(null);
   };
@@ -85,7 +122,9 @@ export function AdminScreen() {
   const editors = accounts?.filter((entry) => entry.role === "editor") ?? [];
   const pendingEditors = editors.filter((entry) => entry.status === "pending");
   const approvedEditors = editors.filter((entry) => entry.status === "approved");
-  const others = accounts?.filter((entry) => entry.role === "teacher" || entry.role === "student") ?? [];
+  const others =
+    accounts?.filter((entry) => entry.role === "teacher" || entry.role === "student" || entry.role === "placeAdmin") ??
+    [];
 
   return (
     <div className="app">
@@ -97,11 +136,8 @@ export function AdminScreen() {
           </span>
         </div>
         <div className="header-spacer" />
-        <span className="t-data muted">{account?.displayName}</span>
         <LanguageToggle />
-        <button type="button" className="icon-button" title={t("auth.signOut")} onClick={logout}>
-          <Icon name="logout" />
-        </button>
+        <AccountMenu />
       </header>
       <div className="screen">
         {offline && (
@@ -119,45 +155,100 @@ export function AdminScreen() {
           </div>
         )}
 
-        <div className="panel">
-          <div className="panel-title">
-            <Icon name="corporate_fare" />
-            <h2 className="t-section">{t("admin.placesTitle")}</h2>
+        {isGlobalAdmin && (
+          <div className="panel">
+            <div className="panel-title">
+              <Icon name="corporate_fare" />
+              <h2 className="t-section">{t("admin.placesTitle")}</h2>
+            </div>
+            <p className="hint" style={{ marginTop: 4 }}>{t("admin.placesSubtitle")}</p>
+
+            <form className="admin-place-form" onSubmit={addPlace}>
+              <input
+                type="text"
+                placeholder={t("admin.placeNamePlaceholder")}
+                value={newPlaceName}
+                onChange={(event) => setNewPlaceName(event.target.value)}
+              />
+              <select value={newPlaceKind} onChange={(event) => setNewPlaceKind(event.target.value)}>
+                <option value="university">{t("admin.kindUniversity")}</option>
+                <option value="highschool">{t("admin.kindHighSchool")}</option>
+                <option value="college">{t("admin.kindCollege")}</option>
+                <option value="other">{t("admin.kindOther")}</option>
+              </select>
+              <button type="submit" className="primary" disabled={busy === "__new_place__" || !newPlaceName.trim()}>
+                <Icon name="add" />
+                {t("admin.addPlace")}
+              </button>
+            </form>
+
+            {places && (
+              <ul className="admin-editor-list" style={{ marginTop: 12 }}>
+                {places.map((place) => (
+                  <li key={place.id} className="admin-editor-row">
+                    <div>
+                      <div className="t-data">{place.name}</div>
+                      <div className="hint">{place.kind}</div>
+                    </div>
+                  </li>
+                ))}
+              </ul>
+            )}
           </div>
-          <p className="hint" style={{ marginTop: 4 }}>{t("admin.placesSubtitle")}</p>
+        )}
 
-          <form className="admin-place-form" onSubmit={addPlace}>
-            <input
-              type="text"
-              placeholder={t("admin.placeNamePlaceholder")}
-              value={newPlaceName}
-              onChange={(event) => setNewPlaceName(event.target.value)}
-            />
-            <select value={newPlaceKind} onChange={(event) => setNewPlaceKind(event.target.value)}>
-              <option value="university">{t("admin.kindUniversity")}</option>
-              <option value="highschool">{t("admin.kindHighSchool")}</option>
-              <option value="college">{t("admin.kindCollege")}</option>
-              <option value="other">{t("admin.kindOther")}</option>
-            </select>
-            <button type="submit" className="primary" disabled={busy === "__new_place__" || !newPlaceName.trim()}>
-              <Icon name="add" />
-              {t("admin.addPlace")}
-            </button>
-          </form>
+        {isGlobalAdmin && (
+          <div className="panel">
+            <div className="panel-title">
+              <Icon name="shield_person" />
+              <h2 className="t-section">{t("admin.placeAdminsTitle")}</h2>
+            </div>
+            <p className="hint" style={{ marginTop: 4 }}>{t("admin.placeAdminsSubtitle")}</p>
 
-          {places && (
-            <ul className="admin-editor-list" style={{ marginTop: 12 }}>
-              {places.map((place) => (
-                <li key={place.id} className="admin-editor-row">
-                  <div>
-                    <div className="t-data">{place.name}</div>
-                    <div className="hint">{place.kind}</div>
-                  </div>
-                </li>
-              ))}
-            </ul>
-          )}
-        </div>
+            <form className="admin-place-form" onSubmit={addPlaceAdmin}>
+              <select value={newAdminPlaceId} onChange={(event) => setNewAdminPlaceId(event.target.value)}>
+                {(places ?? []).map((place) => (
+                  <option key={place.id} value={place.id}>
+                    {place.name}
+                  </option>
+                ))}
+              </select>
+              <input
+                type="text"
+                placeholder={t("auth.username")}
+                autoComplete="off"
+                value={newAdminUsername}
+                onChange={(event) => setNewAdminUsername(event.target.value)}
+              />
+              <input
+                type="text"
+                placeholder={t("auth.displayName")}
+                value={newAdminDisplayName}
+                onChange={(event) => setNewAdminDisplayName(event.target.value)}
+              />
+              <input
+                type="password"
+                placeholder={t("auth.password")}
+                autoComplete="new-password"
+                value={newAdminPassword}
+                onChange={(event) => setNewAdminPassword(event.target.value)}
+              />
+              <button
+                type="submit"
+                className="primary"
+                disabled={busy === "__new_place_admin__" || !newAdminPlaceId || !newAdminUsername.trim() || !newAdminPassword}
+              >
+                <Icon name="add" />
+                {t("admin.addPlaceAdmin")}
+              </button>
+            </form>
+            {placeAdminNotice && (
+              <p className="error" style={{ marginTop: 8 }}>
+                {t(placeAdminNotice === "taken" ? "admin.placeAdminTaken" : "admin.placeAdminFailed")}
+              </p>
+            )}
+          </div>
+        )}
 
         <div className="panel">
           <div className="panel-title">
@@ -262,6 +353,8 @@ export function AdminScreen() {
                       {entry.username} - {placeName(entry.placeId)} -{" "}
                       {entry.role === "teacher"
                         ? t("admin.roleTeacherOf", { names: (entry.instructorNames ?? []).join(", ") })
+                        : entry.role === "placeAdmin"
+                        ? t("admin.rolePlaceAdminOf", { place: placeName(entry.placeId) })
                         : t("admin.roleStudentOf", { program: entry.program ?? "", year: entry.year ?? "" })}
                     </div>
                   </div>
