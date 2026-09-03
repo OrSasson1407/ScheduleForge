@@ -49,6 +49,11 @@ services:
       # fine for trying the app out, not for anyone who actually needs it.
       - key: RESEND_API_KEY
         sync: false
+      # Optional - only meaningful once RESEND_API_KEY is set and you've
+      # verified a sending domain with Resend. Left blank, email goes out
+      # from Resend's own shared onboarding@resend.dev sender.
+      - key: RESEND_FROM_ADDRESS
+        sync: false
 
   - name: scheduleforge-web
     type: web
