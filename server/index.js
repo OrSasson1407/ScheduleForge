@@ -60,12 +60,18 @@
  * mutating request must carry `X-Requested-With: ScheduleForge` - a header a
  * plain cross-site form cannot set, and one a cross-site `fetch` cannot add
  * without first passing the very same origin check at the CORS preflight
- * stage, so together these are this API's CSRF defense. Every request error
- * is logged as structured JSON (`server/log.js`) and, if `SENTRY_DSN` is set,
- * reported to Sentry (`server/errorTracking.js`) - neither is required to run
- * this. None of this is a substitute for running behind HTTPS
- * (`DEPLOYMENT.md`) - a session cookie sent over plain HTTP is trivially
- * interceptable no matter how well it is generated or expired.
+ * stage, so together these are this API's CSRF defense. Every response also
+ * carries a baseline set of security headers (`SECURITY_HEADERS`, below) -
+ * a strict `default-src 'none'` CSP is the correct policy for an API that
+ * never serves HTML or a script of its own, not a placeholder. Every
+ * request error is logged as structured JSON (`server/log.js`) and, if
+ * `SENTRY_DSN` is set, reported to Sentry (`server/errorTracking.js`) -
+ * neither is required to run this. `change-password` and
+ * `reset-password/confirm` are rate-limited the same way `login`/
+ * `register`/`forgot-password` already were. None of this is a substitute
+ * for running behind HTTPS (`DEPLOYMENT.md`) - a session cookie sent over
+ * plain HTTP is trivially interceptable no matter how well it is generated
+ * or expired.
  *
  * HTTP API (JSON in, JSON out; CORS restricted to ALLOWED_ORIGIN; every
  * mutating request needs `X-Requested-With: ScheduleForge`; the session lives
@@ -84,11 +90,11 @@
  *   POST /api/logout               -> 200 {ok:true}, clears the session cookie
  *   POST /api/forgot-password     {email} -> 200 {ok:true} always, regardless of whether the email matched -
  *                                 emails a one-hour single-use reset link when it did (server/email.js) | 429
- *   POST /api/reset-password/confirm   {token, newPassword} -> 200 | 400
+ *   POST /api/reset-password/confirm   {token, newPassword} -> 200 | 400 | 429
  *   GET  /api/me                  (cookie) -> 200 {account}
  *   GET  /api/sessions             any signed-in account -> 200 {sessions: [{id, userAgent, createdAt}], currentId}
  *   DELETE /api/sessions/:id       any signed-in account, own sessions only -> 200 | 404
- *   POST /api/change-password     {currentPassword, newPassword} -> 200 | 401
+ *   POST /api/change-password     {currentPassword, newPassword} -> 200 | 401 | 429
  *   GET  /api/accounts            global admin or place admin -> 200 {accounts: [...]}  (place admin: only their own place)
  *   POST /api/editors/:username/approve   global admin, or the target's own place admin -> 200
  *   POST /api/editors/:username/reject    global admin, or the target's own place admin -> 200
@@ -120,7 +126,7 @@ const { WebSocketServer } = require("ws");
 const store = require("./store");
 const log = require("./log");
 const { captureError } = require("./errorTracking");
-const { rateLimited } = require("./rateLimit");
+const { rateLimited, closeRateLimiter } = require("./rateLimit");
 const { checkStrength, wasUsedBefore } = require("./passwordPolicy");
 const { sendPasswordResetEmail } = require("./email");
 
@@ -132,6 +138,26 @@ if (ALLOWED_ORIGIN === "*") {
 
 const SESSION_COOKIE = "sf_session";
 const CSRF_HEADER_VALUE = "ScheduleForge";
+
+/**
+ * Baseline security headers, sent on every response (JSON, the OPTIONS
+ * preflight, and the bare 404 for anything outside /healthz and /api/*).
+ * This server never renders HTML or serves a script of its own - it is a
+ * JSON API and a WebSocket relay, nothing else - so `default-src 'none'` is
+ * the actually-correct CSP here, not a placeholder: there is nothing for a
+ * browser to ever load, execute or frame from this origin. HSTS is safe to
+ * send unconditionally (a browser only acts on it over a response it
+ * already received via HTTPS - Render terminates TLS in front of this
+ * process, so every real request already is one); it does nothing for a
+ * plain HTTP request, which is exactly the point.
+ */
+const SECURITY_HEADERS = {
+  "X-Content-Type-Options": "nosniff",
+  "X-Frame-Options": "DENY",
+  "Referrer-Policy": "no-referrer",
+  "Content-Security-Policy": "default-src 'none'",
+  "Strict-Transport-Security": "max-age=63072000; includeSubDomains",
+};
 
 /**
  * A wildcard `ALLOWED_ORIGIN` (dev-only) cannot be combined with
@@ -187,6 +213,8 @@ process.on("unhandledRejection", (reason) => {
 const REGISTER_LIMIT = Number(process.env.REGISTER_RATE_LIMIT) || 5;
 const LOGIN_LIMIT = Number(process.env.LOGIN_RATE_LIMIT) || 20;
 const FORGOT_PASSWORD_LIMIT = Number(process.env.FORGOT_PASSWORD_RATE_LIMIT) || 5;
+const RESET_CONFIRM_LIMIT = Number(process.env.RESET_CONFIRM_RATE_LIMIT) || 10;
+const CHANGE_PASSWORD_LIMIT = Number(process.env.CHANGE_PASSWORD_RATE_LIMIT) || 10;
 
 /* --- HTTP API: accounts and the published schedule ----------------------- */
 
@@ -221,6 +249,7 @@ function sendJson(req, res, statusCode, body, extraHeaders) {
     // corsOrigin), so a cache sitting in front of this must not serve one
     // origin's response to another's request.
     Vary: "Origin",
+    ...SECURITY_HEADERS,
     ...extraHeaders,
   });
   res.end(text);
@@ -261,6 +290,7 @@ async function handleApi(req, res, url) {
       Vary: "Origin",
       "Access-Control-Allow-Methods": "GET,POST,DELETE,OPTIONS",
       "Access-Control-Allow-Headers": "Content-Type,X-Requested-With",
+      ...SECURITY_HEADERS,
     });
     res.end();
     return true;
@@ -374,6 +404,13 @@ async function handleApi(req, res, url) {
   }
 
   if (req.method === "POST" && url.pathname === "/api/reset-password/confirm") {
+    // The token itself is an unguessable UUID, so this is defense in depth
+    // rather than the load-bearing protection - but the same "an anonymous,
+    // credential-adjacent endpoint should never be uncapped" reasoning as
+    // forgot-password above still applies.
+    if (await rateLimited(`reset-confirm:${clientIp(req)}`, RESET_CONFIRM_LIMIT, 60 * 60 * 1000)) {
+      return sendJson(req, res, 429, { error: "too many attempts - try again later" });
+    }
     const body = await readJsonBody(req);
     const token = String(body.token || "");
     const newPassword = String(body.newPassword || "");
@@ -417,6 +454,14 @@ async function handleApi(req, res, url) {
   if (req.method === "POST" && url.pathname === "/api/change-password") {
     const account = await accountFromRequest(req);
     if (!account) return sendJson(req, res, 401, { error: "not signed in" });
+    // Keyed by account rather than IP, unlike the anonymous endpoints above:
+    // this one already requires a valid session, so the thing worth
+    // bounding is guesses at *this account's* current password, not
+    // requests from a given address (which a NAT'd classroom could share
+    // across many unrelated, legitimate users).
+    if (await rateLimited(`change-password:${account.username}`, CHANGE_PASSWORD_LIMIT, 60 * 60 * 1000)) {
+      return sendJson(req, res, 429, { error: "too many attempts - try again later" });
+    }
     const body = await readJsonBody(req);
     if (!store.verifyPassword(String(body.currentPassword || ""), account.password)) {
       return sendJson(req, res, 401, { error: "wrong current password" });
@@ -528,7 +573,7 @@ async function handleApi(req, res, url) {
 const server = http.createServer((req, res) => {
   const url = new URL(req.url, `http://${req.headers.host}`);
   if (url.pathname !== "/healthz" && !url.pathname.startsWith("/api/")) {
-    res.writeHead(404);
+    res.writeHead(404, SECURITY_HEADERS);
     res.end();
     return;
   }
@@ -708,6 +753,42 @@ start().catch((error) => {
   captureError(error, { source: "startup" });
   process.exit(1);
 });
+
+/**
+ * Render sends SIGTERM before killing an instance on every deploy and every
+ * scale event, and gives the process a limited grace period to exit on its
+ * own before sending SIGKILL - so "handle SIGTERM" is not a rare-signal
+ * nicety here, it is what makes an ordinary deploy not drop whatever
+ * request or WebSocket message was in flight at that exact moment. SIGINT
+ * gets the same handling, for the same Ctrl+C-during-local-development
+ * reason every other part of this project treats the two the same way.
+ *
+ * `wss.close()` alone only stops the server accepting *new* connections and
+ * waits for every existing one to close on its own (its own doc comment
+ * says so) - it would otherwise wait forever for a browser tab that was
+ * simply left open, so every open client is told to close first. Firestore's
+ * Admin SDK (`server/db.js`) holds no connection of its own that needs an
+ * explicit close the way a socket-based database driver would.
+ */
+let shuttingDown = false;
+function shutdown(signal) {
+  if (shuttingDown) return; // a second SIGTERM/SIGINT while already shutting down is not a reason to double-run this
+  shuttingDown = true;
+  log.info(`${signal} received, shutting down`, {});
+
+  for (const client of wss.clients) client.close(1001, "server shutting down");
+  wss.close();
+  server.close(() => log.info("HTTP server closed", {}));
+  closeRateLimiter();
+
+  // A stuck connection should not hold up a deploy indefinitely - Render's
+  // own grace period is what ultimately decides, this is just a safety net
+  // well inside it so the exit is this process's own choice, not a SIGKILL.
+  setTimeout(() => process.exit(0), 8000).unref();
+}
+
+process.on("SIGTERM", () => shutdown("SIGTERM"));
+process.on("SIGINT", () => shutdown("SIGINT"));
 
 // Exposed only so server/test/api.test.js can close the listener and the
 // WebSocket server cleanly once its assertions are done.

@@ -22,6 +22,7 @@ jobs:
           cache-dependency-path: web/package-lock.json
       - run: npm install -g npm@11
       - run: npm ci
+      - run: npm test
       - run: npm run build
 
   python:
