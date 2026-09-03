@@ -32,6 +32,8 @@ const CRITERION_KEY: Record<SortCriterion, TranslationKey> = {
   elective_collisions: "settings.criteria.elective_collisions",
   obligatory_span: "settings.criteria.obligatory_span",
   max_exams_per_day: "settings.criteria.max_exams_per_day",
+  min_gap_between_moeds: "settings.criteria.min_gap_between_moeds",
+  worst_window_count: "settings.criteria.worst_window_count",
 };
 
 interface ThresholdProps {
@@ -154,6 +156,60 @@ export function SettingsScreen({ settings, hasRooms, onChange, onRun, canRun, re
               least={1}
               onChange={(value) => set({ maxExamsPerDay: value })}
             />
+            <Threshold
+              icon="event_repeat"
+              label={t("settings.minGapBetweenMoedsLabel")}
+              hint={t("settings.minGapBetweenMoedsHint")}
+              value={settings.minGapBetweenMoeds}
+              least={1}
+              onChange={(value) => set({ minGapBetweenMoeds: value })}
+            />
+            <div
+              className={`threshold-card ${settings.maxExamsPerWindow !== null ? "on" : ""}`}
+              title={t("settings.maxPerWindowHint")}
+            >
+              <div className="threshold-head">
+                <label className="threshold-check">
+                  <input
+                    type="checkbox"
+                    checked={settings.maxExamsPerWindow !== null}
+                    onChange={(event) =>
+                      set(
+                        event.target.checked
+                          ? { maxExamsPerWindow: 2, windowDays: 3 }
+                          : { maxExamsPerWindow: null, windowDays: null }
+                      )
+                    }
+                  />
+                  <span className="label">{t("settings.maxPerWindowLabel")}</span>
+                </label>
+                <Icon name="view_week" />
+              </div>
+              <div className={`threshold-value ${settings.maxExamsPerWindow !== null ? "" : "disabled"}`}>
+                <span className="t-label">{t("settings.kValue")}</span>
+                <input
+                  type="number"
+                  min={1}
+                  value={settings.maxExamsPerWindow ?? ""}
+                  disabled={settings.maxExamsPerWindow === null}
+                  onChange={(event) => {
+                    const next = Number(event.target.value);
+                    if (Number.isFinite(next) && next >= 1) set({ maxExamsPerWindow: next });
+                  }}
+                />
+                <span className="t-label">{t("settings.windowDaysLabel")}</span>
+                <input
+                  type="number"
+                  min={1}
+                  value={settings.windowDays ?? ""}
+                  disabled={settings.windowDays === null}
+                  onChange={(event) => {
+                    const next = Number(event.target.value);
+                    if (Number.isFinite(next) && next >= 1) set({ windowDays: next });
+                  }}
+                />
+              </div>
+            </div>
             <div
               className={`threshold-card rooms ${settings.requireRooms ? "on" : ""}`}
               onClick={() => hasRooms && set({ requireRooms: !settings.requireRooms })}
@@ -300,6 +356,15 @@ export function SettingsScreen({ settings, hasRooms, onChange, onRun, canRun, re
                 />
               </label>
             </div>
+            <label className="threshold-check" style={{ marginTop: 12 }}>
+              <input
+                type="checkbox"
+                checked={settings.enforceTimeSlots}
+                onChange={(event) => set({ enforceTimeSlots: event.target.checked })}
+              />
+              <span className="label">{t("settings.enforceTimeSlotsLabel")}</span>
+            </label>
+            <p className="hint">{t("settings.enforceTimeSlotsHint")}</p>
           </div>
 
           <div>

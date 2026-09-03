@@ -21,6 +21,9 @@ requirement says. Gaps are counted inside one study program, one study year and
 one exam period, because that is the group of exams one student sits.
 """
 
+import bisect
+from datetime import timedelta
+
 from ..model.enums import Requirement
 from ..settings import CRITERION_DIRECTION
 
@@ -34,11 +37,13 @@ class SystemMetrics(object):
     __slots__ = ("min_days_between_obligatory", "min_days_between_exams",
                  "average_days_between_exams", "elective_collisions",
                  "worst_program_collisions", "obligatory_span",
-                 "max_exams_per_day")
+                 "max_exams_per_day", "min_gap_between_moeds",
+                 "worst_window_count")
 
     def __init__(self, min_days_between_obligatory, min_days_between_exams,
                  average_days_between_exams, elective_collisions,
-                 worst_program_collisions, obligatory_span, max_exams_per_day):
+                 worst_program_collisions, obligatory_span, max_exams_per_day,
+                 min_gap_between_moeds=NO_PAIR, worst_window_count=0):
         #: 3.1 - smallest gap between two obligatory exams of a program year.
         self.min_days_between_obligatory = min_days_between_obligatory
         #: The same for exams of any kind (threshold 2.2).
@@ -54,6 +59,10 @@ class SystemMetrics(object):
         self.obligatory_span = obligatory_span
         #: 3.5 - the largest number of exams that fall on one day.
         self.max_exams_per_day = max_exams_per_day
+        #: 3.6 - smallest gap between moed Aleph and moed Bet of the same course.
+        self.min_gap_between_moeds = min_gap_between_moeds
+        #: 3.7 - most exams of one program and year inside any `window_days` span.
+        self.worst_window_count = worst_window_count
 
     def value_of(self, criterion):
         return getattr(self, criterion)
@@ -80,7 +89,8 @@ class SystemEvaluator(object):
 
     def measure(self, system):
         """The `SystemMetrics` of one exam system."""
-        groups, by_date, elective_by_program = self._collect(system)
+        groups, by_date, elective_by_program, moed_groups, window_groups = (
+            self._collect(system))
 
         min_obligatory = NO_PAIR
         min_any = NO_PAIR
@@ -117,6 +127,27 @@ class SystemEvaluator(object):
             collisions += program_collisions
             worst = max(worst, program_collisions)
 
+        min_moed_gap = NO_PAIR
+        for entries in moed_groups.values():
+            for first in range(len(entries)):
+                for second in range(first + 1, len(entries)):
+                    if entries[first][0] == entries[second][0]:
+                        continue  # same moed, e.g. two courses sharing a number - never happens, kept safe anyway
+                    gap = abs((entries[first][1] - entries[second][1]).days)
+                    if gap < min_moed_gap:
+                        min_moed_gap = gap
+
+        worst_window = 0
+        if self.settings.window_days:
+            span = timedelta(days=self.settings.window_days - 1)
+            for dates in window_groups.values():
+                dates = sorted(dates)
+                for index, start in enumerate(dates):
+                    end = start + span
+                    count = bisect.bisect_right(dates, end, lo=index) - index
+                    if count > worst_window:
+                        worst_window = count
+
         return SystemMetrics(
             min_days_between_obligatory=min_obligatory,
             min_days_between_exams=min_any,
@@ -126,13 +157,17 @@ class SystemEvaluator(object):
             worst_program_collisions=worst,
             obligatory_span=span,
             max_exams_per_day=max((len(items) for items in by_date.values()),
-                                  default=0))
+                                  default=0),
+            min_gap_between_moeds=min_moed_gap,
+            worst_window_count=worst_window)
 
     def _collect(self, system):
-        """The three views of a system every measurement is taken from."""
+        """The five views of a system every measurement is taken from."""
         groups = {}
         by_date = {}
         elective_by_program = {}
+        moed_groups = {}
+        window_groups = {}
         for scheduled in system.scheduled_exams:
             exam = scheduled.exam
             by_date.setdefault(scheduled.date, []).append(scheduled)
@@ -143,7 +178,10 @@ class SystemEvaluator(object):
                 if requirement is Requirement.ELECTIVE:
                     dates = elective_by_program.setdefault(program, {})
                     dates.setdefault(scheduled.date, []).append(exam)
-        return groups, by_date, elective_by_program
+                window_groups.setdefault(slot, []).append(scheduled.date)
+            moed_key = (exam.course.number, exam.semester)
+            moed_groups.setdefault(moed_key, []).append((exam.moed, scheduled.date))
+        return groups, by_date, elective_by_program, moed_groups, window_groups
 
     def passes(self, metrics):
         """Do the counts over the whole system meet the active thresholds?"""
@@ -156,6 +194,9 @@ class SystemEvaluator(object):
             return False
         if (settings.max_exams_per_day and
                 metrics.max_exams_per_day > settings.max_exams_per_day):
+            return False
+        if (settings.max_exams_per_window and
+                metrics.worst_window_count > settings.max_exams_per_window):
             return False
         return True
 

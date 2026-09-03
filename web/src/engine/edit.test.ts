@@ -137,6 +137,32 @@ describe("legalDatesFor", () => {
     expect(legalDatesFor(input).has("2026-01-05")).toBe(true);
   });
 
+  it("excludes a date a roster proves collides, even for two electives of the same program", () => {
+    const a = exam("a", "Dr. A", [{ programNumber: "83101", year: 1, requirement: "Elective" }]);
+    const b = exam("b", "Dr. B", [{ programNumber: "83101", year: 1, requirement: "Elective" }]);
+    const input: LegalityInput = {
+      exam: a,
+      system: [scheduled("2026-01-01", a), scheduled("2026-01-05", b)],
+      periods: [period()],
+      settings: settings(),
+      roster: { a: ["2021001"], b: ["2021001"] },
+    };
+    expect(legalDatesFor(input).has("2026-01-05")).toBe(false);
+  });
+
+  it("does not restrict a date when the roster shows no shared student", () => {
+    const a = exam("a", "Dr. A", [{ programNumber: "83101", year: 1, requirement: "Elective" }]);
+    const b = exam("b", "Dr. B", [{ programNumber: "83101", year: 1, requirement: "Elective" }]);
+    const input: LegalityInput = {
+      exam: a,
+      system: [scheduled("2026-01-01", a), scheduled("2026-01-05", b)],
+      periods: [period()],
+      settings: settings(),
+      roster: { a: ["2021001"], b: ["2021002"] },
+    };
+    expect(legalDatesFor(input).has("2026-01-05")).toBe(true);
+  });
+
   it("excludes a date that collides via a shared instructor, even in different programs", () => {
     const a = exam("a", "Dr. A", [{ programNumber: "83101", year: 1, requirement: "Elective" }]);
     const b = exam("b", "Dr. A", [{ programNumber: "83102", year: 1, requirement: "Elective" }]);
@@ -234,6 +260,42 @@ describe("legalDatesFor", () => {
       roomAllocator: allocator,
     };
     expect(legalDatesFor(input).has("2026-01-05")).toBe(false);
+  });
+
+  it("excludes a date whose exams could not be colored with the configured time slots", () => {
+    const a = exam("a", "Dr. A", [{ programNumber: "83101", year: 1, requirement: "Elective" }]);
+    const b = exam("b", "Dr. B", [{ programNumber: "83101", year: 1, requirement: "Elective" }]);
+    const input: LegalityInput = {
+      exam: a,
+      system: [scheduled("2026-01-01", a), scheduled("2026-01-05", b)],
+      periods: [period()],
+      settings: settings({ enforceTimeSlots: true, timeSlots: ["09:00"] }),
+    };
+    expect(legalDatesFor(input).has("2026-01-05")).toBe(false);
+  });
+
+  it("allows a date whose exams can be colored with the configured time slots", () => {
+    const a = exam("a", "Dr. A", [{ programNumber: "83101", year: 1, requirement: "Elective" }]);
+    const b = exam("b", "Dr. B", [{ programNumber: "83101", year: 1, requirement: "Elective" }]);
+    const input: LegalityInput = {
+      exam: a,
+      system: [scheduled("2026-01-01", a), scheduled("2026-01-05", b)],
+      periods: [period()],
+      settings: settings({ enforceTimeSlots: true, timeSlots: ["09:00", "13:00"] }),
+    };
+    expect(legalDatesFor(input).has("2026-01-05")).toBe(true);
+  });
+
+  it("does not check colorability when enforceTimeSlots is off, even with too few slots", () => {
+    const a = exam("a", "Dr. A", [{ programNumber: "83101", year: 1, requirement: "Elective" }]);
+    const b = exam("b", "Dr. B", [{ programNumber: "83101", year: 1, requirement: "Elective" }]);
+    const input: LegalityInput = {
+      exam: a,
+      system: [scheduled("2026-01-01", a), scheduled("2026-01-05", b)],
+      periods: [period()],
+      settings: settings({ enforceTimeSlots: false, timeSlots: ["09:00"] }),
+    };
+    expect(legalDatesFor(input).has("2026-01-05")).toBe(true);
   });
 
   it("does not check rooms when requireRooms is off, even with an allocator given", () => {

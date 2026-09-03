@@ -8,7 +8,7 @@
 
 import { StudyProgram } from "../engine/catalog";
 import { ProgramColors } from "../engine/colors";
-import { Course, ExamPeriod, ExamSystem, FacultyRules, Room } from "../engine/model";
+import { Course, EnrollmentRoster, ExamPeriod, ExamSystem, ExcludedDates, FacultyRules, Room } from "../engine/model";
 import { DEFAULT_SETTINGS, Settings } from "../engine/settings";
 
 const STORAGE_KEY = "scheduleforge.v3.data";
@@ -44,6 +44,10 @@ export interface StoredData {
   periods: ExamPeriod[];
   rooms: Room[];
   faculty: FacultyRules;
+  /** Institution-wide excluded dates (optional, separate from `periods`). */
+  globalExcluded: ExcludedDates[];
+  /** Real per-student enrollment (optional; item 1). */
+  enrollmentRoster: EnrollmentRoster;
   selectedPrograms: string[];
   settings: Settings;
   /** The colour tag of every study program (tagging & theming). */
@@ -53,6 +57,8 @@ export interface StoredData {
   periodsFileName: string | null;
   roomsFileName: string | null;
   facultyFileName: string | null;
+  globalExcludedFileName: string | null;
+  enrollmentRosterFileName: string | null;
   savedAt: string | null;
 }
 
@@ -61,6 +67,8 @@ export const EMPTY_DATA: StoredData = {
   periods: [],
   rooms: [],
   faculty: {},
+  globalExcluded: [],
+  enrollmentRoster: {},
   selectedPrograms: [],
   settings: DEFAULT_SETTINGS,
   programColors: {},
@@ -69,6 +77,8 @@ export const EMPTY_DATA: StoredData = {
   periodsFileName: null,
   roomsFileName: null,
   facultyFileName: null,
+  globalExcludedFileName: null,
+  enrollmentRosterFileName: null,
   savedAt: null,
 };
 

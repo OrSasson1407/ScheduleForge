@@ -8,10 +8,12 @@ from datetime import date
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from schedule_forge.model.course import Course, ProgramEnrollment
+from schedule_forge.model.enrollment import EnrollmentRoster
 from schedule_forge.model.enums import Evaluation, Moed, Requirement, Semester
 from schedule_forge.model.exam import Exam
 from schedule_forge.model.exam_period import ExamPeriod, ExcludedDates
-from schedule_forge.scheduling.constraints import NoTwoExamsSameDayInYearAndProgram
+from schedule_forge.scheduling.constraints import (NoTwoExamsSameDayInYearAndProgram,
+                                                    constraints_for)
 from schedule_forge.scheduling.exam_builder import ExamBuilder, SchedulingDataError
 from schedule_forge.scheduling.generator import ExamSystemGenerator, GenerationReport
 from schedule_forge.model.study_program import StudyProgramCatalog
@@ -219,6 +221,54 @@ class TestExamSystemGenerator(unittest.TestCase):
         groups = list(systems[0].grouped_by_period())
         self.assertEqual([(Semester.FALL, Moed.ALEPH), (Semester.FALL, Moed.BET)],
                          [key for key, _ in groups])
+
+
+class TestSharedStudentsEndToEnd(unittest.TestCase):
+    """Item 1 - a roster can force apart a pair the (program, year) rule's
+    own elective/elective exception would otherwise allow to share a date."""
+
+    def _electives_of_one_program(self):
+        # Distinct instructors: isolates this from the unconditional
+        # instructor rule, which would force the two exams apart on its own
+        # regardless of the roster and defeat the point of the test.
+        first_course = Course("83112", "Course 83112", "Dr. A", [], Evaluation.EXAM)
+        second_course = Course("83113", "Course 83113", "Dr. B", [], Evaluation.EXAM)
+        slots = {("83101", 1): Requirement.ELECTIVE}
+        return [Exam(first_course, Semester.FALL, Moed.ALEPH, slots),
+                Exam(second_course, Semester.FALL, Moed.ALEPH, slots)]
+
+    def test_a_roster_forces_apart_an_elective_pair_that_shares_a_real_student(self):
+        exams = self._electives_of_one_program()
+        roster = EnrollmentRoster({"83112": {"2021001"}, "83113": {"2021001"}})
+        generator = ExamSystemGenerator(exams, two_day_periods(),
+                                        constraints_for(None, roster))
+
+        systems = list(generator.generate())
+        self.assertTrue(systems)
+        for system in systems:
+            dates = [scheduled.date for scheduled in system.scheduled_exams]
+            self.assertEqual(len(dates), len(set(dates)))
+
+    def test_without_roster_evidence_the_same_pair_may_still_share_a_date(self):
+        exams = self._electives_of_one_program()
+        generator = ExamSystemGenerator(exams, two_day_periods(),
+                                        constraints_for(None, None))
+
+        systems = list(generator.generate())
+        same_date = [system for system in systems
+                    if len({s.date for s in system.scheduled_exams}) == 1]
+        self.assertTrue(same_date)
+
+    def test_a_roster_with_no_overlap_for_this_pair_changes_nothing(self):
+        exams = self._electives_of_one_program()
+        roster = EnrollmentRoster({"83112": {"2021001"}, "83113": {"2021002"}})
+        generator = ExamSystemGenerator(exams, two_day_periods(),
+                                        constraints_for(None, roster))
+
+        systems = list(generator.generate())
+        same_date = [system for system in systems
+                    if len({s.date for s in system.scheduled_exams}) == 1]
+        self.assertTrue(same_date)
 
 
 if __name__ == "__main__":

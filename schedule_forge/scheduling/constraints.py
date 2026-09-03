@@ -165,7 +165,64 @@ class MinimumDaysBetweenExams(Constraint):
                 "study program" % self.days)
 
 
-def constraints_for(settings=None):
+class MinimumGapBetweenMoeds(Constraint):
+    """At least `days` days between moed Aleph and moed Bet of the same course.
+
+    The gap rules above deliberately skip this pair (`period_key` differs), on
+    the grounds that a student only sits one moed. This rule is the opposite
+    case: the instructor grading moed Aleph, or the department preparing the
+    room and paperwork for moed Bet, needs a real gap between the two
+    sittings themselves, regardless of which students take which.
+    """
+
+    PAIRWISE_DAY_DISTANCE = True
+
+    def __init__(self, days):
+        self.days = days
+
+    def required_gap(self, first, second):
+        if first.course.number != second.course.number:
+            return 0
+        if first.semester != second.semester:
+            return 0
+        if first.moed == second.moed:
+            return 0
+        return self.days
+
+    def describe(self):
+        return ("at least %d days between moed Aleph and moed Bet of the same "
+                "course" % self.days)
+
+
+class SharedStudentsSameDay(Constraint):
+    """No two exams that a real, enrolled student takes both of may share a date.
+
+    Unconditional, like `NoTwoExamsSameDayInYearAndProgram`: real evidence that
+    a student sits both exams is not a preference to weigh, it is a scheduling
+    impossibility, the same as it is for that rule's own (program, year)
+    aggregate. Registered only when a roster was actually loaded (an optional
+    input) - `ProblemDecomposition._required_gap` already takes the *max* gap
+    across every registered rule, so this correctly forces apart a pair the
+    (program, year) rule's elective/elective exception would otherwise allow
+    same-day, the moment real evidence proves they share a student, with no
+    change needed to that rule at all.
+    """
+
+    PAIRWISE_DAY_DISTANCE = True
+
+    def __init__(self, roster):
+        self.roster = roster
+
+    def required_gap(self, first, second):
+        if self.roster.shares_students(first.course.number, second.course.number):
+            return 1
+        return 0
+
+    def describe(self):
+        return "no two exams that share a real, enrolled student on the same date"
+
+
+def constraints_for(settings=None, roster=None):
     """The rules of a run: the rule of version 1.0, plus the thresholds that are on."""
     rules = [NoTwoExamsSameDayInYearAndProgram(), NoInstructorTwoExamsSameDay()]
     if settings is not None:
@@ -174,4 +231,8 @@ def constraints_for(settings=None):
                 settings.min_days_between_obligatory))
         if settings.min_days_between_any:
             rules.append(MinimumDaysBetweenExams(settings.min_days_between_any))
+        if settings.min_gap_between_moeds:
+            rules.append(MinimumGapBetweenMoeds(settings.min_gap_between_moeds))
+    if roster is not None:
+        rules.append(SharedStudentsSameDay(roster))
     return rules

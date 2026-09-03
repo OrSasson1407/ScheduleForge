@@ -40,6 +40,13 @@ def build_parser():
     parser.add_argument("--faculty",
                         help="the staff constraints file: the dates every "
                              "instructor is not available on (version 3.0)")
+    parser.add_argument("--global-excluded",
+                        help="dates on which no exam of any course may take "
+                             "place, for the whole institution")
+    parser.add_argument("--enrollment",
+                        help="a StudentID,CourseNumber CSV of real enrollment "
+                             "facts, used to catch conflicts the (program, "
+                             "year) model alone cannot see")
     parser.add_argument("--output", default="output/exam_systems.txt",
                         help="the file the exam systems are written to")
     parser.add_argument("--calendars",
@@ -67,6 +74,8 @@ def main(argv=None):
         output_path=arguments.output,
         rooms_path=arguments.rooms,
         faculty_path=arguments.faculty,
+        global_excluded_path=arguments.global_excluded,
+        enrollment_path=arguments.enrollment,
         settings_path=arguments.settings,
         calendar_directory=arguments.calendars,
         count_only=arguments.count_only)
@@ -92,6 +101,8 @@ def main(argv=None):
               % (len(result.rooms), sum(room.capacity for room in result.rooms)))
     if result.availability is not None:
         print("Staff constraints read: %d instructor(s)" % len(result.availability))
+    if result.roster is not None:
+        print("Enrollment read: %d course(s) with a real roster" % len(result.roster))
     for line in result.settings.describe_thresholds():
         print("Threshold: %s" % line)
     for position, line in enumerate(result.settings.describe_sorting()):

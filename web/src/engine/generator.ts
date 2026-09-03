@@ -25,7 +25,7 @@
  */
 
 import { Component, Decomposition, iterSolutions } from "./decomposition";
-import { Exam, ExamSystem, FacultyRules, Room, ScheduledExam } from "./model";
+import { EnrollmentRoster, Exam, ExamSystem, FacultyRules, Room, ScheduledExam } from "./model";
 import { PartialThresholdChecker } from "./partial";
 import { RoomAllocation, RoomAllocator } from "./rooms";
 import { BoundedBest } from "./topk";
@@ -82,11 +82,12 @@ export interface SearchInput {
   settings: Settings;
   rooms?: Room[];
   faculty?: FacultyRules;
+  roster?: EnrollmentRoster;
 }
 
 export function runSearch(input: SearchInput): SearchResult {
   const started = performance.now();
-  const { exams, decomposition, settings } = input;
+  const { exams, decomposition, settings, roster } = input;
   const components = decomposition.components;
 
   const allocator = input.rooms && input.rooms.length
@@ -96,7 +97,8 @@ export function runSearch(input: SearchInput): SearchResult {
     exams,
     decomposition.depthOfPosition,
     settings,
-    allocator ? allocator.totalCapacity : null
+    allocator ? allocator.totalCapacity : null,
+    roster
   );
   const usePruner = pruner.isNeeded;
   if (usePruner) pruner.reset();
@@ -186,7 +188,7 @@ export function runSearch(input: SearchInput): SearchResult {
         exam,
         date: placement[position],
       }));
-      const metrics = measure(system);
+      const metrics = measure(system, settings.windowDays);
       if (passesThresholds(metrics, settings)) {
         const allocation = allocator ? allocator.allocate(system) : null;
         if (!(settings.requireRooms && allocation && !allocation.isComplete)) {

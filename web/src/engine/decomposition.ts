@@ -29,14 +29,50 @@
  * is a rule about one exam alone, so it costs the engine nothing.
  */
 
-import { Exam, ExamPeriod, FacultyRules, availableDates, fromIso, isInstructorAvailable, periodKey } from "./model";
+import {
+  EnrollmentRoster,
+  Exam,
+  ExamPeriod,
+  FacultyRules,
+  availableDates,
+  fromIso,
+  isInstructorAvailable,
+  periodKey,
+  sharesStudents,
+} from "./model";
 import { Settings } from "./settings";
 
 /** 0 when the two exams do not restrict each other, else the days between them. */
-export function requiredGap(first: Exam, second: Exam, settings?: Settings): number {
+export function requiredGap(
+  first: Exam,
+  second: Exam,
+  settings?: Settings,
+  roster?: EnrollmentRoster
+): number {
   let gap = 0;
 
   if (first.course.instructor === second.course.instructor) {
+    gap = Math.max(gap, 1);
+  }
+
+  // 2.6 - moed Aleph and moed Bet of the same course, unlike 2.1/2.2 below,
+  // which deliberately skip this pair (a student only sits one of the two).
+  if (
+    settings?.minGapBetweenMoeds &&
+    first.course.number === second.course.number &&
+    first.semester === second.semester &&
+    first.moed !== second.moed
+  ) {
+    gap = Math.max(gap, settings.minGapBetweenMoeds);
+  }
+
+  // Item 1 - unconditional, like the instructor rule above: real evidence a
+  // student sits both exams is not a preference to weigh, it is a scheduling
+  // impossibility. This is the *max* of every rule's answer, so it correctly
+  // forces apart a pair the 1.2 elective/elective exception below would
+  // otherwise allow same-day, the moment a roster proves they share a
+  // student - with no change needed to that exception at all.
+  if (roster && sharesStudents(roster, first.course.number, second.course.number)) {
     gap = Math.max(gap, 1);
   }
 
@@ -118,7 +154,8 @@ export function decompose(
    * space on every run instead of always the same corner of it. It never
    * changes which systems exist, only the order a search visits them in.
    */
-  randomize = false
+  randomize = false,
+  roster?: EnrollmentRoster
 ): Decomposition {
   const byKey = new Map(periods.map((p) => [periodKey(p.semester, p.moed), p]));
   const datesOfExam = exams.map((exam) => {
@@ -134,7 +171,7 @@ export function decompose(
     if (!datesOfExam[first].length) continue;
     for (let second = first + 1; second < exams.length; second += 1) {
       if (!datesOfExam[second].length) continue;
-      const gap = requiredGap(exams[first], exams[second], settings);
+      const gap = requiredGap(exams[first], exams[second], settings, roster);
       if (gap <= 0) continue;
       // Dates further apart than the rule asks for can never break it.
       const firstSpan = datesOfExam[first];

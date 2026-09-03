@@ -179,6 +179,97 @@ describe("requiredGap", () => {
     expect(requiredGap(a, b, settings)).toBe(4);
   });
 
+  it("applies minGapBetweenMoeds between moed Aleph and moed Bet of the same course", () => {
+    const settings: Settings = { ...DEFAULT_SETTINGS, minGapBetweenMoeds: 5 };
+    const a = exam({ course: { number: "83101", name: "A", instructor: "Dr. A", enrollments: [], evaluation: "Exam" }, moed: "ALEPH" });
+    const b = exam({ course: { number: "83101", name: "A", instructor: "Dr. A", enrollments: [], evaluation: "Exam" }, moed: "BET" });
+    expect(requiredGap(a, b, settings)).toBe(5);
+  });
+
+  it("does not apply minGapBetweenMoeds to the same moed", () => {
+    const settings: Settings = { ...DEFAULT_SETTINGS, minGapBetweenMoeds: 5 };
+    const a = exam({ course: { number: "83101", name: "A", instructor: "Dr. A", enrollments: [], evaluation: "Exam" }, moed: "ALEPH" });
+    const b = exam({ course: { number: "83101", name: "A", instructor: "Dr. B", enrollments: [], evaluation: "Exam" }, moed: "ALEPH" });
+    expect(requiredGap(a, b, settings)).toBe(0);
+  });
+
+  it("does not apply minGapBetweenMoeds to different courses", () => {
+    const settings: Settings = { ...DEFAULT_SETTINGS, minGapBetweenMoeds: 5 };
+    const a = exam({ course: { number: "83101", name: "A", instructor: "Dr. A", enrollments: [], evaluation: "Exam" }, moed: "ALEPH" });
+    const b = exam({ course: { number: "83102", name: "B", instructor: "Dr. B", enrollments: [], evaluation: "Exam" }, moed: "BET" });
+    expect(requiredGap(a, b, settings)).toBe(0);
+  });
+
+  it("does not apply minGapBetweenMoeds across different semesters even with the same course number", () => {
+    const settings: Settings = { ...DEFAULT_SETTINGS, minGapBetweenMoeds: 5 };
+    const a = exam({ course: { number: "83101", name: "A", instructor: "Dr. A", enrollments: [], evaluation: "Exam" }, semester: "FALL", moed: "ALEPH" });
+    const b = exam({ course: { number: "83101", name: "A", instructor: "Dr. B", enrollments: [], evaluation: "Exam" }, semester: "SPRI", moed: "BET" });
+    expect(requiredGap(a, b, settings)).toBe(0);
+  });
+
+  it("minGapBetweenMoeds applies with no shared slot at all, unlike the 1.2/2.1/2.2 rules", () => {
+    const settings: Settings = { ...DEFAULT_SETTINGS, minGapBetweenMoeds: 5 };
+    const a = exam({
+      course: { number: "83101", name: "A", instructor: "Dr. A", enrollments: [], evaluation: "Exam" },
+      moed: "ALEPH",
+      slots: [slot("83101", 1, "Obligatory")],
+    });
+    const b = exam({
+      course: { number: "83101", name: "A", instructor: "Dr. A", enrollments: [], evaluation: "Exam" },
+      moed: "BET",
+      slots: [slot("83102", 2, "Obligatory")],
+    });
+    expect(requiredGap(a, b, settings)).toBe(5);
+  });
+
+  it("applies a gap of 1 when the roster proves a real student shares both courses", () => {
+    const a = exam({
+      course: { number: "83101", name: "A", instructor: "Dr. A", enrollments: [], evaluation: "Exam" },
+    });
+    const b = exam({
+      course: { number: "83102", name: "B", instructor: "Dr. B", enrollments: [], evaluation: "Exam" },
+    });
+    const roster = { "83101": ["2021001"], "83102": ["2021001"] };
+    expect(requiredGap(a, b, undefined, roster)).toBe(1);
+  });
+
+  it("does not apply a roster gap with no shared student", () => {
+    const a = exam({
+      course: { number: "83101", name: "A", instructor: "Dr. A", enrollments: [], evaluation: "Exam" },
+    });
+    const b = exam({
+      course: { number: "83102", name: "B", instructor: "Dr. B", enrollments: [], evaluation: "Exam" },
+    });
+    const roster = { "83101": ["2021001"], "83102": ["2021002"] };
+    expect(requiredGap(a, b, undefined, roster)).toBe(0);
+  });
+
+  it("a roster forces apart a pair the 1.2 elective/elective exception would otherwise allow same-day", () => {
+    const a = exam({
+      course: { number: "83101", name: "A", instructor: "Dr. A", enrollments: [], evaluation: "Exam" },
+      slots: [slot("83999", 1, "Elective")],
+    });
+    const b = exam({
+      course: { number: "83102", name: "B", instructor: "Dr. B", enrollments: [], evaluation: "Exam" },
+      slots: [slot("83999", 1, "Elective")],
+    });
+    const roster = { "83101": ["2021001"], "83102": ["2021001"] };
+    // Without the roster, two electives of the same (program, year) may share a date.
+    expect(requiredGap(a, b)).toBe(0);
+    // With real evidence they share a student, they may not.
+    expect(requiredGap(a, b, undefined, roster)).toBe(1);
+  });
+
+  it("without a roster argument at all, nothing about shared students applies", () => {
+    const a = exam({
+      course: { number: "83101", name: "A", instructor: "Dr. A", enrollments: [], evaluation: "Exam" },
+    });
+    const b = exam({
+      course: { number: "83102", name: "B", instructor: "Dr. B", enrollments: [], evaluation: "Exam" },
+    });
+    expect(requiredGap(a, b)).toBe(0);
+  });
+
   it("is symmetric: requiredGap(a, b) equals requiredGap(b, a)", () => {
     const settings: Settings = { ...DEFAULT_SETTINGS, minDaysBetweenObligatory: 6 };
     const a = exam({ slots: [slot("83101", 1, "Obligatory")] });

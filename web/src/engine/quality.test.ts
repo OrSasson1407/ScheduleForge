@@ -166,6 +166,51 @@ describe("measure", () => {
     expect(measure(system).max_exams_per_day).toBe(3);
   });
 
+  it("min_gap_between_moeds is the days between moed Aleph and moed Bet of the same course", () => {
+    const course = { number: "83101", name: "Course", instructor: "Dr. A", enrollments: [], evaluation: "Exam" as const };
+    const system = [
+      scheduled("2026-01-01", [], { course, moed: "ALEPH" }),
+      scheduled("2026-01-10", [], { course, moed: "BET" }),
+    ];
+    expect(measure(system).min_gap_between_moeds).toBe(9);
+  });
+
+  it("min_gap_between_moeds is NO_PAIR when no course has two moedim scheduled", () => {
+    const system = [
+      scheduled("2026-01-01", [], { course: { number: "83101", name: "A", instructor: "Dr. A", enrollments: [], evaluation: "Exam" } }),
+      scheduled("2026-01-02", [], { course: { number: "83102", name: "B", instructor: "Dr. B", enrollments: [], evaluation: "Exam" } }),
+    ];
+    expect(measure(system).min_gap_between_moeds).toBe(NO_PAIR);
+  });
+
+  it("worst_window_count is 0 when windowDays is not given, even with a busy program", () => {
+    const system = [
+      scheduled("2026-01-01", [{ programNumber: "83101", year: 1, requirement: "Obligatory" }]),
+      scheduled("2026-01-02", [{ programNumber: "83101", year: 1, requirement: "Obligatory" }]),
+      scheduled("2026-01-03", [{ programNumber: "83101", year: 1, requirement: "Obligatory" }]),
+    ];
+    expect(measure(system).worst_window_count).toBe(0);
+  });
+
+  it("worst_window_count counts the busiest window of one program and year", () => {
+    const system = [
+      scheduled("2026-01-01", [{ programNumber: "83101", year: 1, requirement: "Obligatory" }]),
+      scheduled("2026-01-02", [{ programNumber: "83101", year: 1, requirement: "Obligatory" }]),
+      scheduled("2026-01-03", [{ programNumber: "83101", year: 1, requirement: "Obligatory" }]),
+    ];
+    expect(measure(system, 3).worst_window_count).toBe(3);
+    expect(measure(system, 2).worst_window_count).toBe(2);
+  });
+
+  it("worst_window_count does not mix exams of different programs or years", () => {
+    const system = [
+      scheduled("2026-01-01", [{ programNumber: "83101", year: 1, requirement: "Obligatory" }]),
+      scheduled("2026-01-01", [{ programNumber: "83102", year: 1, requirement: "Obligatory" }]),
+      scheduled("2026-01-01", [{ programNumber: "83101", year: 2, requirement: "Obligatory" }]),
+    ];
+    expect(measure(system, 3).worst_window_count).toBe(1);
+  });
+
   it("groups by semester and moed too, not only program and year", () => {
     const system = [
       scheduled("2026-01-01", [{ programNumber: "83101", year: 1, requirement: "Obligatory" }], { moed: "ALEPH" }),
@@ -250,6 +295,42 @@ describe("passesThresholds", () => {
     ]);
     expect(
       passesThresholds(busy, { maxElectiveCollisions: null, minObligatorySpan: null, maxExamsPerDay: 0 })
+    ).toBe(true);
+  });
+
+  it("fails when worst_window_count exceeds maxExamsPerWindow", () => {
+    const busy = measure(
+      [
+        scheduled("2026-01-01", [{ programNumber: "83101", year: 1, requirement: "Obligatory" }]),
+        scheduled("2026-01-02", [{ programNumber: "83101", year: 1, requirement: "Obligatory" }]),
+      ],
+      3
+    );
+    expect(
+      passesThresholds(busy, {
+        maxElectiveCollisions: null,
+        minObligatorySpan: null,
+        maxExamsPerDay: null,
+        maxExamsPerWindow: 1,
+      })
+    ).toBe(false);
+  });
+
+  it("passes when worst_window_count is within maxExamsPerWindow", () => {
+    const busy = measure(
+      [
+        scheduled("2026-01-01", [{ programNumber: "83101", year: 1, requirement: "Obligatory" }]),
+        scheduled("2026-01-02", [{ programNumber: "83101", year: 1, requirement: "Obligatory" }]),
+      ],
+      3
+    );
+    expect(
+      passesThresholds(busy, {
+        maxElectiveCollisions: null,
+        minObligatorySpan: null,
+        maxExamsPerDay: null,
+        maxExamsPerWindow: 2,
+      })
     ).toBe(true);
   });
 });

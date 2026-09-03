@@ -1,8 +1,10 @@
 import { describe, expect, it } from "vitest";
 import {
+  EnrollmentRoster,
   ExamPeriod,
   FacultyRules,
   addDays,
+  applyGlobalExcluded,
   availableDates,
   datesBetween,
   fromDisplayDate,
@@ -10,6 +12,7 @@ import {
   isExcluded,
   isInstructorAvailable,
   periodKey,
+  sharesStudents,
   slotKey,
   toDisplayDate,
   toIso,
@@ -242,6 +245,33 @@ describe("availableDates", () => {
   });
 });
 
+describe("applyGlobalExcluded", () => {
+  it("adds the given dates to every period's own excluded list", () => {
+    const periods = [
+      period({ semester: "FALL", moed: "ALEPH" }),
+      period({ semester: "SPRI", moed: "BET" }),
+    ];
+    const excluded = [{ start: "2026-01-02", end: "2026-01-02", comment: "closure" }];
+
+    const result = applyGlobalExcluded(periods, excluded);
+
+    expect(result[0].excluded).toEqual(excluded);
+    expect(result[1].excluded).toEqual(excluded);
+    expect(availableDates(result[0])).not.toContain("2026-01-02");
+  });
+
+  it("does not mutate the periods that were passed in", () => {
+    const original = period();
+    applyGlobalExcluded([original], [{ start: "2026-01-02", end: "2026-01-02", comment: "" }]);
+    expect(original.excluded).toEqual([]);
+  });
+
+  it("returns the same array reference when there is nothing to add", () => {
+    const periods = [period()];
+    expect(applyGlobalExcluded(periods, [])).toBe(periods);
+  });
+});
+
 describe("isInstructorAvailable", () => {
   it("is available when the instructor has no rules at all", () => {
     expect(isInstructorAvailable({}, "Dr. A", "2026-01-05")).toBe(true);
@@ -262,5 +292,31 @@ describe("isInstructorAvailable", () => {
     const rules: FacultyRules = { "Dr. A": [{ start: "2026-01-01", end: "2026-01-03", comment: "" }] };
     expect(isInstructorAvailable(rules, "Dr. A", "2026-01-01")).toBe(false);
     expect(isInstructorAvailable(rules, "Dr. A", "2026-01-03")).toBe(false);
+  });
+});
+
+describe("sharesStudents", () => {
+  it("is true when a real student is enrolled in both courses", () => {
+    const roster: EnrollmentRoster = { "83112": ["a", "b"], "83113": ["b", "c"] };
+    expect(sharesStudents(roster, "83112", "83113")).toBe(true);
+  });
+
+  it("is false with no overlap between the two rosters", () => {
+    const roster: EnrollmentRoster = { "83112": ["a"], "83113": ["b"] };
+    expect(sharesStudents(roster, "83112", "83113")).toBe(false);
+  });
+
+  it("is false when one of the courses has no roster at all", () => {
+    const roster: EnrollmentRoster = { "83112": ["a"] };
+    expect(sharesStudents(roster, "83112", "99999")).toBe(false);
+  });
+
+  it("is true for a course shared with itself when it has students", () => {
+    const roster: EnrollmentRoster = { "83112": ["a"] };
+    expect(sharesStudents(roster, "83112", "83112")).toBe(true);
+  });
+
+  it("is false for an unknown course shared with itself", () => {
+    expect(sharesStudents({}, "83112", "83112")).toBe(false);
   });
 });

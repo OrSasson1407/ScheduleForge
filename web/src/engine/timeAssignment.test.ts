@@ -206,3 +206,60 @@ describe("assignTimes with a room allocation", () => {
     expect(result.bookings.get(e3.id)?.start).toBe("13:00");
   });
 });
+
+describe("assignTimes with enforceTimeSlots on", () => {
+  it("gives two conflicting exams of the same day different slots, ignoring rooms entirely", () => {
+    const e1 = exam("83101");
+    const e2 = exam("83102");
+    const system = [scheduled("2026-01-01", e1), scheduled("2026-01-01", e2)];
+    const result = assignTimes(
+      system,
+      settings({ timeSlots: ["09:00", "13:00"], enforceTimeSlots: true }),
+      null
+    );
+    expect(result.isComplete).toBe(true);
+    expect(result.bookings.get(e1.id)?.start).not.toBe(result.bookings.get(e2.id)?.start);
+  });
+
+  it("fails with a listed failure when a date cannot be colored", () => {
+    const e1 = exam("83101");
+    const e2 = exam("83102");
+    const system = [scheduled("2026-01-01", e1), scheduled("2026-01-01", e2)];
+    const result = assignTimes(
+      system,
+      settings({ timeSlots: ["09:00"], enforceTimeSlots: true }),
+      null
+    );
+    expect(result.isComplete).toBe(false);
+    expect(result.failures).toHaveLength(1);
+  });
+
+  it("uses the roster for a defense-in-depth conflict, even with no shared program/year", () => {
+    const e1 = exam("83101");
+    const e2 = exam("83102");
+    // Override the exam() helper's shared slot so 1.2/2.1/2.2 would never
+    // relate these two at all - only the roster can make them conflict here.
+    e1.slots = [{ key: "83201|1", programNumber: "83201", year: 1, requirement: "Obligatory" }];
+    e2.slots = [{ key: "83202|1", programNumber: "83202", year: 1, requirement: "Obligatory" }];
+    const system = [scheduled("2026-01-01", e1), scheduled("2026-01-01", e2)];
+    const roster = { [e1.course.number]: ["2021001"], [e2.course.number]: ["2021001"] };
+    const result = assignTimes(
+      system,
+      settings({ timeSlots: ["09:00"], enforceTimeSlots: true }),
+      null,
+      roster
+    );
+    expect(result.isComplete).toBe(false);
+  });
+
+  it("falls back to the cosmetic round-robin pass when enforceTimeSlots is off, even with the same data", () => {
+    const e1 = exam("83101");
+    const e2 = exam("83102");
+    const system = [scheduled("2026-01-01", e1), scheduled("2026-01-01", e2)];
+    const result = assignTimes(system, settings({ timeSlots: ["09:00"], enforceTimeSlots: false }), null);
+    // The cosmetic pass has no colorability concept - it never fails, just spreads round robin.
+    expect(result.isComplete).toBe(true);
+    expect(result.bookings.get(e1.id)?.start).toBe("09:00");
+    expect(result.bookings.get(e2.id)?.start).toBe("09:00");
+  });
+});

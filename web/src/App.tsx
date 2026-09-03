@@ -45,7 +45,7 @@ import { withExamById, withExamOn } from "./engine/edit";
 import { SchedulingDataError, buildExams } from "./engine/exams";
 import { dataProblems } from "./engine/completeness";
 import { Candidate, SearchReport, runSearch, sortCandidates } from "./engine/generator";
-import { Exam, ExamSystem } from "./engine/model";
+import { Exam, ExamSystem, applyGlobalExcluded } from "./engine/model";
 import { Settings } from "./engine/settings";
 import { EMPTY_DATA, PublishedSchedule, StoredData, Theme, loadStored, saveStored } from "./state/storage";
 
@@ -143,6 +143,11 @@ export default function App() {
   });
 
   const programs = useMemo(() => programsOf(data.courses), [data.courses]);
+  /** `data.periods` plus the institution-wide excluded dates, for scheduling and display. */
+  const effectivePeriods = useMemo(
+    () => applyGlobalExcluded(data.periods, data.globalExcluded),
+    [data.periods, data.globalExcluded]
+  );
   const problems = useMemo(
     () => dataProblems(data.courses, data.periods, data.rooms, data.faculty, data.settings.defaultStudents),
     [data.courses, data.periods, data.rooms, data.faculty, data.settings.defaultStudents]
@@ -192,10 +197,11 @@ export default function App() {
       }
       const decomposition = decompose(
         exams,
-        data.periods,
+        effectivePeriods,
         data.settings,
         data.faculty,
-        data.settings.sortCriteria.length > 0
+        data.settings.sortCriteria.length > 0,
+        data.enrollmentRoster
       );
       const blocked = exams.filter((_, index) => !decomposition.datesOfExam[index].length);
       if (blocked.length) {
@@ -211,6 +217,7 @@ export default function App() {
         settings: data.settings,
         rooms: data.rooms,
         faculty: data.faculty,
+        roster: data.enrollmentRoster,
       });
       setFound(result);
       setOutputIndex(0);
@@ -253,7 +260,7 @@ export default function App() {
     if (!account) return false;
     const schedule: PublishedSchedule = {
       system,
-      periods: data.periods,
+      periods: effectivePeriods,
       rooms: data.rooms,
       selectedPrograms: data.selectedPrograms,
       programColors: data.programColors,
@@ -327,14 +334,24 @@ export default function App() {
                 periods={data.periods}
                 rooms={data.rooms}
                 faculty={data.faculty}
+                globalExcluded={data.globalExcluded}
+                enrollmentRoster={data.enrollmentRoster}
                 coursesFileName={data.coursesFileName}
                 periodsFileName={data.periodsFileName}
                 roomsFileName={data.roomsFileName}
                 facultyFileName={data.facultyFileName}
+                globalExcludedFileName={data.globalExcludedFileName}
+                enrollmentRosterFileName={data.enrollmentRosterFileName}
                 onCourses={(courses, fileName) => update({ courses, coursesFileName: fileName })}
                 onPeriods={(periods, fileName) => update({ periods, periodsFileName: fileName })}
                 onRooms={(rooms, fileName) => update({ rooms, roomsFileName: fileName })}
                 onFaculty={(faculty, fileName) => update({ faculty, facultyFileName: fileName })}
+                onGlobalExcluded={(globalExcluded, fileName) =>
+                  update({ globalExcluded, globalExcludedFileName: fileName })
+                }
+                onEnrollmentRoster={(enrollmentRoster, fileName) =>
+                  update({ enrollmentRoster, enrollmentRosterFileName: fileName })
+                }
                 onCoursesChange={(courses) => update({ courses, coursesFileName: null })}
                 onRoomsChange={(rooms) => update({ rooms, roomsFileName: null })}
                 onFacultyChange={(faculty) => update({ faculty, facultyFileName: null })}
@@ -422,9 +439,10 @@ export default function App() {
           <OutputScreen
             candidates={found.candidates}
             report={found.report}
-            periods={data.periods}
+            periods={effectivePeriods}
             rooms={data.rooms}
             faculty={data.faculty}
+            roster={data.enrollmentRoster}
             programs={programs}
             selectedPrograms={data.selectedPrograms}
             programColors={data.programColors}
