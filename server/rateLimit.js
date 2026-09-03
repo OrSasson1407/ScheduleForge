@@ -58,4 +58,15 @@ async function rateLimited(key, limit, windowMs) {
   return checkMemory(key, limit, windowMs);
 }
 
-module.exports = { rateLimited };
+/** Closes the Redis connection, if one was ever opened. A no-op otherwise - used by index.js's graceful shutdown. */
+async function closeRateLimiter() {
+  if (client) {
+    try {
+      await client.quit();
+    } catch {
+      /* shutting down anyway; nothing left to do with this error */
+    }
+  }
+}
+
+module.exports = { rateLimited, closeRateLimiter };

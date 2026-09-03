@@ -31,6 +31,13 @@ const FIRESTORE_ALREADY_EXISTS = 6;
 const PASSWORD_HISTORY_LENGTH = 5;
 /** How long a forgot-password link stays usable. */
 const PASSWORD_RESET_TTL_HOURS = 1;
+/**
+ * Safety net on the two whole-collection scans (`listPlaces`, `listAccounts`
+ * with no `placeId`) so a single request can't burn through the Spark
+ * plan's 50k-reads/day quota - not a real limit for this app (a school's
+ * place/account count is nowhere near this), just a cap on the blast radius.
+ */
+const LIST_QUERY_LIMIT = 1000;
 
 const accounts = () => db.collection("accounts");
 const places = () => db.collection("places");
@@ -203,7 +210,7 @@ module.exports = {
   findAccountByEmail,
 
   async listPlaces() {
-    const snapshot = await places().get();
+    const snapshot = await places().limit(LIST_QUERY_LIMIT).get();
     return snapshot.docs
       .map((doc) => ({ id: doc.id, ...doc.data() }))
       .sort((a, b) => a.name.localeCompare(b.name));
@@ -218,7 +225,7 @@ module.exports = {
   /** Every account, or - for a place admin - only the ones that belong to `placeId`. */
   async listAccounts(placeId) {
     const query = placeId ? accounts().where("placeId", "==", placeId) : accounts();
-    const snapshot = await query.get();
+    const snapshot = await query.limit(LIST_QUERY_LIMIT).get();
     return snapshot.docs
       .map((doc) => publicAccount(accountFromDoc(doc)))
       .sort((a, b) => a.username.localeCompare(b.username));
