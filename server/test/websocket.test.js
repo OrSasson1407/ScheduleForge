@@ -38,23 +38,86 @@ before(async () => {
   throw new Error("server did not become healthy in time");
 });
 
+// `WebSocketServer.close()` only stops accepting new connections and waits
+// for every existing one to close on its own - it does not terminate them
+// (ws's own doc comment on `close()` says so explicitly). A test that throws
+// or times out before reaching its own `.close()` calls therefore leaves a
+// socket open on both ends forever, and since nothing here ever forces it
+// shut, `after` below hangs waiting for a `'close'` event that would never
+// come, and so does the whole `node --test` process - exactly what turned
+// one flaky "timed out waiting for a message" failure into a CI job stuck
+// for hours instead of a failing test. Tracking every socket this file opens
+// and force-terminating whichever ones are still open, regardless of why,
+// is what makes a single test's failure cost seconds instead of hours.
+const openSockets = new Set();
+
 after(() => {
+  for (const ws of openSockets) ws.terminate();
   serverModule.wss.close();
   serverModule.server.close();
 });
 
+// Two server actions - a successful move, and a client disconnecting while
+// holding a lock - broadcast *two* messages back to back in one synchronous
+// handler (`moved` then `lock-changed`; `lock-changed` then `presence` -
+// server/index.js's "move" and `ws.on("close")` handlers). A `nextMessage`
+// built on a single `ws.once("message", ...)` cannot safely consume two
+// messages from one trigger with two sequential calls: `once` only catches
+// an event that fires *after* it is attached, and Node delivers a burst of
+// frames that arrived together by calling every currently-registered
+// listener for the first one, then the next, synchronously, before any
+// `await` in the calling test gets a chance to run and attach a listener
+// for the second message. The result is not "sometimes slow" but a message
+// silently and permanently dropped, and the next `nextMessage` call then
+// waits out its full timeout for a message that already came and went -
+// which is exactly what made two timing-sensitive tests below flake on a
+// real CI run even after the first version of this fix (which only solved
+// the *editor-vs-observer* instance of the same race, not this one).
+//
+// The fix is a real, per-socket queue rather than a one-shot listener: every
+// incoming message is buffered in arrival order the moment it is received,
+// completely independent of whether or when anything calls `nextMessage`,
+// and `nextMessage` simply drains that queue (or waits for the next arrival
+// if it is empty). This makes every test's `nextMessage` call safe
+// regardless of how many messages one action produces or when each call
+// happens to run relative to the broadcast.
+const messageQueues = new WeakMap(); // ws -> { messages: [], waiters: [] }
+
 function connect() {
-  return new WebSocket(wsBase);
+  const ws = new WebSocket(wsBase);
+  openSockets.add(ws);
+  ws.once("close", () => openSockets.delete(ws));
+  const queue = { messages: [], waiters: [] };
+  messageQueues.set(ws, queue);
+  ws.on("message", (raw) => {
+    const message = JSON.parse(raw.toString());
+    if (queue.waiters.length) queue.waiters.shift()(message);
+    else queue.messages.push(message);
+  });
+  return ws;
 }
 
-/** Resolves with the next parsed JSON message received on `ws`. */
+/** Resolves with the next parsed JSON message received on `ws`, in arrival order. */
 function nextMessage(ws) {
+  const queue = messageQueues.get(ws);
+  if (queue.messages.length) return Promise.resolve(queue.messages.shift());
   return new Promise((resolve, reject) => {
-    const timer = setTimeout(() => reject(new Error("timed out waiting for a message")), 3000);
-    ws.once("message", (raw) => {
+    const waiter = (message) => {
       clearTimeout(timer);
-      resolve(JSON.parse(raw.toString()));
-    });
+      resolve(message);
+    };
+    // A shared CI runner has the Firestore emulator, this server and several
+    // concurrent sockets competing for the same CPU; 3000ms occasionally was
+    // not enough headroom for a broadcast to arrive under that contention,
+    // the same class of slow-first-request problem `before` above already
+    // gives 150 * 200ms for. This is a generous ceiling, not a real
+    // expectation of the relay ever taking this long.
+    const timer = setTimeout(() => {
+      const index = queue.waiters.indexOf(waiter);
+      if (index !== -1) queue.waiters.splice(index, 1); // do not let a late arrival resolve an already-rejected wait
+      reject(new Error("timed out waiting for a message"));
+    }, 10000);
+    queue.waiters.push(waiter);
   });
 }
 
@@ -228,9 +291,12 @@ test("moving a locked exam broadcasts the move and releases the lock", async () 
   await nextMessage(editor);
   await nextMessage(observer); // the observer's own lock-changed broadcast
 
-  const movedPromise = nextMessage(observer);
+  // "move" broadcasts two messages back to back (moved, then lock-changed) -
+  // nextMessage's own queue (above) is what makes consuming them with two
+  // plain, sequential calls safe regardless of exactly when each one runs
+  // relative to the broadcast.
   editor.send(JSON.stringify({ type: "move", examId: "exam-1", date: "2026-03-15" }));
-  const moved = await movedPromise;
+  const moved = await nextMessage(observer);
   assert.equal(moved.type, "moved");
   assert.equal(moved.examId, "exam-1");
   assert.equal(moved.date, "2026-03-15");

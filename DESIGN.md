@@ -47,10 +47,30 @@ all - the database swapped out from underneath `server/store.js` a second
 time, what had to change to move from rows to documents, and the real
 Blueprint bugs and a real, live walkthrough of standing the whole thing up
 that only doing it for real, not just building toward it, ever surfaced.
-The code holds the internal documentation that completes all eleven.
+The code holds the internal documentation that completes all eleven. Part
+XII (sections 58 to 63) describes six account-security upgrades chosen
+together from a longer list, because they cluster into one coherent posture
+rather than six unrelated features: cookie-based sessions replacing the
+bearer token part IX built, and the CSRF defense that transport requires; a
+password policy that checks strength beyond length and remembers an
+account's last five passwords so none of them can simply be reused; a session/device
+list an account can see and revoke from; the `placeAdmin` role, an
+administrator scoped to one place rather than every place; and a
+self-service "forgot password" email flow alongside the admin-mediated reset
+part X already had. Part XIII (sections 64 to 69) describes five further
+scheduling factors chosen from a brainstormed list of gaps in the model of
+part III: institution-wide blackout dates on top of the per-instructor ones
+of the version 3.0 extension, a minimum gap between moed Aleph and moed Bet
+of the same course, a cap on how many exams of one study program and year
+fall inside any short window of days, real per-student enrollment conflicts
+the aggregate program-and-year model of requirement 1.2 cannot see on its
+own, and time-of-day turned from the purely cosmetic layer of section 24
+into a real constraint the search itself can be asked to enforce.
 
 The requirements of the extension of section 4 are specified in a document of
-their own, `REQUIREMENTS-V3-EXTENSION.md`, as requirement 4.2 asks.
+their own, `REQUIREMENTS-V3-EXTENSION.md`, as requirement 4.2 asks; the five
+scheduling factors of part XIII are specified the same way, in
+`REQUIREMENTS-SCHEDULING-EXTENSION.md`.
 
 ---
 
@@ -2147,4 +2167,344 @@ from reading the code:
   freshly generated admin password confirmed by actually signing in at
   the live URL, and the now-orphaned Postgres database deleted only after
   all of that was confirmed working.
+
+---
+
+# Part XII - Auth hardening: cookie sessions, password policy, session list, place-scoped administration, and self-service password reset
+
+Section 41 called part IX's server "not a production authentication
+system" and named the gaps plainly: no rate limiting, no password reset, a
+session token that lived only until the process restarted. Part X closed
+the first two - rate limiting, sessions that expire, an admin-mediated
+reset - and section 49 still ended on "there is still no email sending
+anywhere in this project." From a brainstormed list of twenty further
+improvements, six were picked and built together, not because any one of
+them was overdue on its own, but because together they are one coherent
+security posture rather than six unrelated features: a session that cannot
+be read by a script on the page, a password that cannot simply be guessed
+or reused, a way to see and end a session without contacting an admin, an
+administrator whose reach stops at their own place, and a password reset
+that does not require contacting anyone at all. Cookie transport is the
+foundation the other five build on cleanly, so it went first.
+
+## 58. Cookie sessions, and the CSRF defense the transport requires
+
+`POST /api/login` now sets the session token in an `HttpOnly` cookie
+(`sf_session`) instead of returning it in the response body for the client
+to hold in `localStorage` the way section 42 described; `POST /api/logout`
+clears it. Every authenticated route resolves the caller from that cookie
+(`accountFromRequest`) rather than an `Authorization: Bearer` header, and
+every client call in `web/src/auth/api.ts` adds `credentials: "include"` so
+the browser attaches the cookie itself - no code anywhere reads or sets the
+session value directly any more, the whole point of moving it out of
+`localStorage` in the first place: a script an attacker got onto the page
+through some other hole can no longer simply read the session and walk off
+with it.
+
+That protection is not free. A cookie is attached to a request
+automatically by the browser, including a request a *different* site
+persuaded the browser to make - the exact attack a bearer token sitting in
+`localStorage` was structurally immune to, since nothing but this
+application's own JavaScript could ever attach it. Two things close that
+gap: `Access-Control-Allow-Credentials: true` paired with `ALLOWED_ORIGIN`
+set to the web app's real origin rather than a wildcard (a wildcard origin
+is not legal for a credentialed request at all, so this is enforced, not
+merely configured), and every mutating request required to carry
+`X-Requested-With: ScheduleForge` - a header a plain cross-site form cannot
+set, and one a cross-site `fetch` cannot add without first passing the very
+same origin check at the CORS preflight stage. Together they are this
+API's whole CSRF defense, and `server/index.js`'s own header comment says
+so plainly: cookie transport is "a real difference against XSS, at the cost
+of needing genuine CORS/CSRF care instead of the false safety a bearer
+token gave for free."
+
+## 59. A password policy that checks strength beyond length, and a history that remembers
+
+`server/passwordPolicy.js` rejects a password that equals or contains the
+account's own username, or matches an entry of an embedded, roughly
+200-entry set of the passwords that show up at the top of every published
+breach-analysis list, year after year - no third-party library, the same
+stance section 25.1's CSV parser already took on that kind of dependency,
+and no network call needed for a fixed list this small. The reasoning
+follows current guidance (NIST 800-63B) rather than the older instinct to
+force a digit or a symbol: what actually predicts a password being guessed
+is whether it is already on every attacker's list, not whether it satisfies
+an arbitrary complexity rule that mostly just pushes people toward
+predictable substitutions. `wasUsedBefore` checks a newly chosen password
+against the current hash and the account's last five (`previousPasswords`,
+pushed on every user-chosen change, capped at five) using the same
+`verifyPassword` comparison section 42 already used to avoid a plain
+string check. Both checks run at registration and at any change the
+account itself chose; the admin-generated temporary password of section 49
+is exempt, since it is random, single-use, and immediately superseded by a
+password the checks *do* apply to.
+
+## 60. A session/device list
+
+`GET /api/sessions` lists every session belonging to the caller -
+`{id, userAgent, createdAt}`, plus which one is the request's own -
+and `DELETE /api/sessions/:id` ends one of them. The `id` shown is not the
+session token itself: `createSession` now stores a separate, random public
+`id` alongside the token that is the Firestore document's own key, so a
+session can be listed and revoked (`sessionIdFor`, `listSessions`,
+`revokeSession` in `server/store.js`) without the response ever containing
+the one value that would let someone impersonate it. `revokeSession`
+matches on `username` as well as `id`, which is the actual thing stopping
+one account from ending a session that belongs to someone else -
+`AccountMenu.tsx` is the one new piece of UI this needed, replacing the
+bare sign-out button three screens' headers had duplicated, with "this
+device" labelled on the matching row.
+
+## 61. Institution-scoped sub-admins
+
+A new role, `placeAdmin`, sits between `admin` (every place) and the three
+roles part X already scoped to one place. `isGlobalAdmin(account)` and
+`canAdminister(account, placeId)` replace the scattered
+`account.role !== "admin"` checks section 42 described, and
+`POST /api/places/:placeId/admins` (global-admin-only) creates one,
+mirroring `register`'s shape but skipping the pending-approval step an
+admin creating another admin does not need.
+
+Building this surfaced a real authorization-ordering bug, caught by the
+project's own test suite before it ever reached production: the first pass
+at the approve/reject/reset-password endpoints looked up the target account
+first and returned 404 if it did not exist, only checking the caller's
+authorization afterward - which meant an unauthorized or even unauthenticated
+caller could learn whether a given username existed at all, purely from
+whether the response was a 403 or a 404. `tests/validation.test.js`'s
+existing "approve is refused for a non-admin" case expected a 403 and got a
+404 instead, which is what caught it. The fix reorders all three endpoints
+to check `isGlobalAdmin(account) || account.role === "placeAdmin"`
+unconditionally, before any lookup of the target happens at all, and only
+then looks the target up and checks `canAdminister` for the finer-grained
+per-place question - the same "authorization first, existence second"
+ordering a well-built system should default to, restored here after
+getting it backwards once.
+
+## 62. Self-service password reset by email
+
+`server/email.js` sends through Resend's HTTP API directly (a plain
+`fetch`, no SDK); `RESEND_API_KEY` unset logs the reset link instead of
+emailing it, the same "optional external service, fully usable without it"
+shape section 51 already used for `SENTRY_DSN` and section 49's
+`REDIS_URL` - a class or a local checkout needs nothing new to exercise the
+whole flow end to end, only a real deployment that wants real email needs
+the account. `POST /api/forgot-password` always answers with the same
+generic response whether or not the given address matched an account, so
+the response itself never reveals which addresses are registered; when it
+does match, a single-use token good for one hour is written to a new
+`passwordResets` collection and consumed inside a Firestore transaction
+(`consumePasswordReset`), closing a race two near-simultaneous uses of the
+same link would otherwise open. `POST /api/reset-password/confirm` runs
+the same strength and history checks section 59 added, and revokes every
+session on the account exactly as an admin-mediated reset already did.
+
+## 63. What was checked
+
+* **New and rewritten server test files, against the real emulator** -
+  `server/test/sessions.test.js`, `password-policy.test.js`,
+  `place-admin.test.js` and `forgot-password.test.js` are new; `api.test.js`,
+  `validation.test.js` and `rate-limit.test.js` were rewritten to carry a
+  session cookie the way a browser would instead of a bearer header, and
+  `validation.test.js`'s existing place-admin case is what caught section
+  61's ordering bug before this ever reached a browser.
+* **A manual pass in the browser** - registered a new account (now
+  requiring an email), confirmed the session lived in a cookie rather than
+  `localStorage`, opened the sessions list from a second browser profile and
+  revoked the first session from there, triggered forgot-password with no
+  `RESEND_API_KEY` set locally and confirmed the logged reset link genuinely
+  reset the password, and, as the global admin, created a place admin and
+  confirmed that account's `/api/accounts` and approve/reject calls only
+  ever reached its own place's data.
+* **A real deployment bug, caught by the live service, not by inspection** -
+  `server/Dockerfile` copies its files in by explicit name rather than
+  `COPY . .`, and the two files this part added (`email.js`,
+  `passwordPolicy.js`) were not added to that list; the first production
+  deploy crashed on boot with `Error: Cannot find module './passwordPolicy'`
+  - Render kept serving the previous, working build throughout, so nothing
+  was down while this was found and fixed - and a second deploy, plus a
+  live `/healthz` check against the running service, confirmed the fix.
+* `npx tsc -b`, `npm run build`, the Python suite and
+  `server/test:ci` all stayed green throughout.
+
+---
+
+# Part XIII - Five new exam-scheduling factors
+
+Every rule up to part III's section 10 reasons about a course's students
+only in aggregate - the (program, year) it is taught in - because that is
+what requirement 1.1's catalogue and Appendix A's data files carry, and
+every threshold since has stayed inside that same model. From a
+brainstormed list of gaps in it - things the aggregate model genuinely
+cannot see, and things the requirements never asked the software to do at
+all - five were picked: institution-wide blackout dates, a minimum gap
+between moed Aleph and moed Bet of the same course, a cap on how many exams
+of one program and year fall inside any short window of days, real
+per-student enrollment conflicts, and time-of-day turned from a purely
+cosmetic display layer into a real constraint the search itself can be
+asked to enforce.
+
+Each one is built on **both** scheduling engines this project maintains -
+the Python engine (`schedule_forge/`), section 4's tested reference
+implementation, and `web/src/engine/`, the hand-mirrored TypeScript engine
+`App.tsx` calls directly in the browser (section 8.2) - since, as section
+8.2 already says, neither one is derived from the other; a change to
+either alone would leave them silently disagreeing. Every new setting
+described below is unset or off by default, so a run that never asks for
+any of this behaves exactly as it did before this part, on both engines,
+verified by every pre-existing test in both suites staying green throughout.
+
+## 64. Institution-wide blackout dates
+
+A second, optional excluded-dates input, distinct from the per-instructor
+staff constraints of the version 3.0 extension: dates on which no exam of
+any course may be held at all, for the whole institution, rather than one
+instructor. `GlobalExcludedDatesParser` and `merge_into` (Python),
+`parseGlobalExcluded` and `applyGlobalExcluded` (TypeScript) reuse the
+existing `ExcludedDates`/`ExamPeriod` shape as-is - no new model class on
+either side, since a period's own excluded-dates list is already exactly
+the right shape for a date that happens to come from a different source.
+The two engines genuinely differ in one small way here, not by mistake:
+Python's `ExamPeriod.available_dates()` caches its result the first time
+anything asks for it, so the merge has to happen before anything does;
+TypeScript's `availableDates` is a pure function recomputed on demand, so
+no such ordering exists to get wrong there.
+
+## 65. Minimum gap between moed Aleph and moed Bet of the same course
+
+`MinimumGapBetweenMoeds` (`schedule_forge/scheduling/constraints.py`) and a
+top-level check inside `requiredGap` (`decomposition.ts`) both deliberately
+do **not** key on `period_key` - the opposite of the existing 2.1/2.2 gap
+rules (section 10.1), which explicitly skip a pair whose moed differs, on
+the reasoning that a student only ever sits one of the two. This rule is
+for the people around the exam rather than the student sitting it: the
+instructor grading moed Aleph, or the department preparing the room and
+the paperwork for moed Bet, genuinely needs real time between the two
+sittings themselves regardless of who takes which. A new setting,
+`min_gap_between_moeds`, and a matching soft sort criterion (maximise the
+gap) round it out the way every threshold since section 10 has been
+mirrored by one.
+
+## 66. A cap on exams of one program and year within a sliding window
+
+Aggregate, not pairwise - today's "at most k exams on one day" (2.5) says
+nothing about four exams spread one per day across four straight days,
+which is exactly the gap this closes. It lives in the incremental pruner
+(`PartialThresholdChecker`/its TypeScript mirror, section 10.2) rather than
+the pairwise rule list, using the exact discipline every threshold there
+already established: a running structure kept in lock step with the
+search's own placement and backtracking (`apply`/`unapply`), checked only
+at the moment a newly placed exam could possibly be the one that broke it,
+since a count here only ever grows as the walk goes forward. Two settings,
+required together (`max_exams_per_window`, `window_days`), and a matching
+soft criterion, `worst_window_count` (minimise the worst window found).
+
+## 67. Real per-student enrollment conflicts
+
+No rule anywhere in this engine, before this section, has ever known an
+individual student exists - only the (program, year) group requirement 1.2
+already reads. A new, entirely optional input changes that: one row per
+`StudentID,CourseNumber` fact - genuinely tabular per-fact data, unlike the
+hand-typed Appendix A record files the rest of `data_io` reads, so Python's
+own `csv` module is used directly here rather than the project's usual
+hand-rolled record reader - builds an `EnrollmentRoster` mapping a course
+number to the real students enrolled in it. A new pairwise rule,
+`SharedStudentsSameDay`, forbids two exams from sharing a date the instant
+the roster proves a real student sits both of them.
+
+Because the decomposition already takes the *maximum* gap across every
+registered rule (section 4.1), this correctly overrides the existing
+elective/elective same-day exception of requirement 1.2 with no change to
+that rule at all: a pair the aggregate model would otherwise wave through
+gets forced apart the moment real evidence says otherwise. No roster
+loaded, and nothing about existing behaviour changes on either engine -
+verified directly, not merely assumed, by a test asserting the identical
+pair is still allowed to collide when the roster argument is left out.
+
+## 68. Time-of-day as a real, search-enforced constraint
+
+Section 24.1 called hour-of-day "a layer on top of the search, not a
+change to it," and that was true without exception until now - the search
+has never had any concept of time of day at all, on either engine; a time
+was only ever assigned to an already-chosen, date-only system, purely for
+display. This section adds the opposite as an option: two exams on the
+same date that need different times - their (program, year) groups
+intersect, the same grouping the existing elective-collision heuristic
+already reads, or a loaded roster proves they share a real student, the
+same defence in depth section 67 already uses - may now only share that
+date if a time slot is actually free for each of them.
+
+A small greedy per-day graph colouring answers that (`TimeSlotAssigner` in
+Python, `timeSlots.ts` on the web), and it is reused two genuinely
+different ways rather than one: as a real feasibility gate inside the same
+incremental pruner section 66 uses, during the search itself - a date that
+cannot be coloured with the configured slots is rejected outright, a real
+backtrack, not a display choice - and as a **stateless** finishing pass
+for whichever system actually needs to be shown or exported, deliberately
+never cached anywhere. The pruner is one mutable object that keeps
+mutating past whatever candidate it just accepted as the search continues
+walking, so nothing about its state at the moment a candidate was judged
+reliably describes that candidate any more by the time a person is looking
+at it - and a system a person has since hand-edited on the output screen
+(section 14) has no such guarantee to begin with, so it has to be
+recoloured fresh regardless of where the cache question even arises.
+
+Designing the TypeScript side of this surfaced a genuine
+backward-compatibility hazard, not merely a theoretical one:
+`Settings.timeSlots` already shipped non-empty by default
+(`["09:00", "13:00", "16:00"]`), to drive the cosmetic pass section 24
+already gave every existing user. Gating the new hard constraint on
+"`timeSlots` is non-empty" would have silently turned it on, and its
+performance cost, for every user of this software the moment it shipped,
+with no opt-in at all. The fix is a second, independent setting,
+`enforceTimeSlots` (off by default): `timeSlots` keeps exactly its old
+meaning, and this new flag alone decides whether it is enforced or merely
+cosmetic. Python needed no equivalent second flag, since it never shipped
+a non-empty default there to protect in the first place - the same feature
+landing with two different shapes on its two engines, on purpose, because
+the two engines were not starting from the same place.
+
+None of this is free: the greedy colouring reruns on a date's accumulated
+exams on every `apply` that touches that date, potentially many times over
+one search rather than once per finished system. It is bounded by the same
+examine-count and time-limit budgets every other threshold in section 10.2
+already relies on, but the practical effect on a genuinely large input may
+be "the search examines fewer systems in the same budget" rather than a
+slowdown that shows up anywhere obvious - worth a real benchmark before
+turning this on for a large faculty's worth of exams, not merely trusting
+that the existing budgets will make it someone else's problem.
+
+## 69. What was checked
+
+* **Both suites, in full, after every feature** - not only at the end:
+  430 Python tests (`python -m unittest discover -s tests`), including a
+  new `test_time_slots.py` and `test_enrollment_parser.py`, and extended
+  `test_constraints.py`, `test_settings_parser.py`, `test_scheduling.py`
+  and `test_version3.py`; 662 TypeScript tests (`npx vitest run`) and a
+  clean `npx tsc -b`, including a new `timeSlots.test.ts` and extended
+  `partial.test.ts`, `quality.test.ts`, `decomposition.test.ts`,
+  `edit.test.ts`, `csvImport.test.ts`, `model.test.ts` and
+  `settings.test.ts` - both suites stayed fully green after each of the
+  five factors, one at a time, not merely once everything was in place.
+* **The pruner's incremental state directly, not only end to end** - both
+  section 66's window counters and section 68's per-date colouring cache
+  have a dedicated test that calls `apply` then `unapply` and asserts the
+  internal structure is back to empty, the same direct coverage the
+  aggregate thresholds of section 10.2 already had before this part.
+* **A second backward-compatibility trap, unrelated to section 68's own,
+  found while wiring the two new soft sort criteria in** - `SORT_CRITERIA`
+  and `DEFAULT_SORT_CRITERIA` were the same array on both engines before
+  this part; simply appending the new 3.6 and 3.7 criteria to that shared
+  array would have silently added them to every run's default sort order,
+  changing tie-breaking for a run that never asked for either. Both engines
+  now keep an explicit, smaller default subset, independent of the full
+  list `SORT_CRITERIA` still exposes for validation and the settings
+  screen to offer as a choice.
+* **The web app confirmed to still load cleanly** - reaches its sign-in
+  screen with no new console errors - but the new input-screen and
+  settings-screen controls themselves (the two new file loaders, the two
+  new threshold cards, the `enforceTimeSlots` toggle) were not given a
+  full visual pass in the browser in this pass, since that needs the
+  Firestore emulator and the auth server of part XII running locally, not
+  merely the static `web/` dev server this repository can run alone.
 

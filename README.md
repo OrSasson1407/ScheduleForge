@@ -20,13 +20,21 @@ interfaces:
   searching the calendar, a mobile-friendly layout, an accessibility pass,
   notification drafts of a schedule change, a viewer role for collaboration,
   and a search performance dashboard - are described in `DESIGN.md`, part VII.
+  Five further scheduling factors - institution-wide blackout dates, a
+  minimum gap between moed Aleph and moed Bet of the same course, a cap on
+  exams of one program and year within a sliding window, real per-student
+  enrollment conflicts, and time-of-day as an opt-in constraint the search
+  itself can enforce rather than only a display choice - are specified in
+  `REQUIREMENTS-SCHEDULING-EXTENSION.md` and described in `DESIGN.md`,
+  part XIII.
 * **version 2.0** - `web/`, the visual interface: an input screen, a settings
   screen and an output screen that shows the exam systems on a year calendar.
 * **version 1.0** - `schedule_forge/` and `main.py`, the engine and its file
   based command line interface.
 
-`REQUIREMENTS-V3-EXTENSION.md` specifies the extension of section 4, and
-`DESIGN.md` describes the design of all three versions.
+`REQUIREMENTS-V3-EXTENSION.md` specifies the extension of section 4 and
+`REQUIREMENTS-SCHEDULING-EXTENSION.md` specifies the five factors above;
+`DESIGN.md` describes the design of all of it.
 
 ---
 
@@ -75,7 +83,13 @@ let the user tune, and what the search produces.
      spreadsheet instead - save it as CSV first (Excel, Google Sheets: File >
      Download/Save As > CSV); the screen states the column layout each one
      expects. Every value is checked the same way and rejected with the same
-     wording as a badly formed Appendix A file.
+     wording as a badly formed Appendix A file. Two more files, both optional
+     (`DESIGN.md`, part XIII): institution-wide excluded dates, in the same
+     Appendix A format as the staff constraints file but with no instructor
+     to name, and a real per-student enrollment roster - a plain
+     `StudentID,CourseNumber` CSV, the only data file in this software with no
+     Appendix A text form of its own, since it is genuinely tabular per-fact
+     data rather than the hand-typed records the other files hold.
    * *Study programs* - up to five are picked from the list, built entirely
      from whatever program numbers the loaded courses file mentions (nothing
      is built into the software itself - an empty list here means no courses
@@ -91,20 +105,33 @@ let the user tune, and what the search produces.
    "Produce the exam systems" sits in a bar fixed to the foot of the page.
 
 2. **Settings.** The threshold requirements of version 3.0, each with its own
-   k and its own icon, and the criteria the systems are sorted by, dragged
-   into the order of preference with the up/down arrows next to their rank -
-   all five are on by default, so a plain run already looks for the best
-   systems instead of merely the first ones that happen to pass. Changing only
-   the sorting orders the list again without searching again; changing a
-   threshold or a criterion's direction does search again, because when at
-   least one criterion is on, the search keeps looking for a better system
-   until it runs out of systems, time, or its examine budget - never stopping
-   merely because it has found `max_candidates` of them (`DESIGN.md`, part VI).
-   A fourth card, **Hour of Day**, gives every exam of a found system a
-   display time of day, spread across the time slots typed there (the search
-   itself still schedules by date alone, never by hour - `DESIGN.md`, part
-   VII, section 24). While connected to a collaboration room as a viewer,
-   this whole screen is read-only.
+   k and its own icon, plus two more from the five scheduling factors of
+   `DESIGN.md` part XIII - a minimum gap between moed Aleph and moed Bet of
+   the same course, and a cap on exams of one program and year within a
+   sliding window - and the criteria the systems are sorted by, dragged
+   into the order of preference with the up/down arrows next to their rank.
+   The five criteria of version 3.0 are on by default, so a plain run
+   already looks for the best systems instead of merely the first ones that
+   happen to pass; the two new criteria that match the two new thresholds
+   are available to add but start off, so turning on a new threshold never
+   silently changes the sort order of a run that never asked for it.
+   Changing only the sorting orders the list again without searching again;
+   changing a threshold or a criterion's direction does search again,
+   because when at least one criterion is on, the search keeps looking for
+   a better system until it runs out of systems, time, or its examine
+   budget - never stopping merely because it has found `max_candidates` of
+   them (`DESIGN.md`, part VI). A fourth card, **Hour of Day**, gives every
+   exam of a found system a display time of day, spread across the time
+   slots typed there; by default the search itself still schedules by date
+   alone, never by hour, exactly as it always has (`DESIGN.md`, part VII,
+   section 24) - a separate "Enforce time slots during search" toggle,
+   off by default, turns that into a real constraint instead: two exams
+   that need different times may then only share a date if a slot is
+   actually free for each of them (`DESIGN.md`, part XIII, section 68).
+   Institution-wide blackout dates and a real per-student enrollment file
+   are loaded from the input screen's file section, both optional. While
+   connected to a collaboration room as a viewer, this whole screen is
+   read-only.
 3. **Output.** A sidebar splits the system on screen into six readings of the
    same data, never six different systems: **Overview** - the week by week
    calendar, a strip of KPI cards (average gap, worst elective collisions,
@@ -212,6 +239,11 @@ belong to, decides what they see:
   Reject / Reset password actions. A teacher or student needs no approval to
   start using their account, since there is nothing a read-only account
   could do that approval would be protecting.
+- **place admin** (`DESIGN.md`, part XII) - the same page as an admin, but
+  scoped to one place: only that place's accounts, only its own pending
+  editors to approve or reject. Created by the global admin from the new
+  "Place Admins" panel, for an institution that wants to manage its own
+  editors without seeing every other institution on the same deployment.
 
 A new editor stays **pending**, unable to sign in, until an admin approves
 them - and since that approval has to be visible on whichever computer the
@@ -226,14 +258,20 @@ four fixed demo accounts - `admin`/`admin123`, `editor`/`editor123`,
 `teacher`/`teacher123`, `student`/`student123` - never do this in production,
 since those passwords are public (they're in this README).
 
-Real hardening now backs this: passwords are hashed, a login is rate-limited
-and an account locks out for 15 minutes after 5 wrong passwords in a row, a
-session expires after 24 hours of inactivity, and an admin can reset anyone's
-password (which forces a new one to be chosen on next sign-in and signs that
-account out everywhere). What is still missing - HTTPS is your deployment's
-job, not this code's (`DEPLOYMENT.md`), and there is still no self-service
-"forgot password" email flow, only an admin-mediated reset - is listed in
-full in `DESIGN.md`, part X.
+Real hardening backs this (`DESIGN.md`, part X and, for the second round
+below, part XII): a session lives in an `HttpOnly` cookie rather than a
+token a script on the page could read, with a sliding 24-hour expiry; a
+login is rate-limited and an account locks out for 15 minutes after 5 wrong
+passwords in a row; a chosen password is checked against a common-password
+list and against the account's own username, and cannot be one of an
+account's last five; every account can see and revoke its own signed-in
+sessions from the account menu; and a forgotten password has two paths
+back - self-service, a one-hour single-use link emailed to the address on
+file, or an admin (global, or that account's own place admin) resetting it
+to a random temporary password relayed out of band. Either way the account
+chooses its own new password on next sign-in. What is still missing - HTTPS
+is your deployment's job, not this code's (`DEPLOYMENT.md`) - is listed in
+full in `DESIGN.md`, part XII.
 
 **Deploying this for real, past a laptop on one network**: two accounts, not
 one - a Firebase project for the database (free, no card, no expiration)
@@ -267,6 +305,8 @@ Extra options:
 | `--settings FILE` | the threshold requirements and the sorting criteria | none, so no threshold |
 | `--rooms FILE` | the rooms of the campus; exams are then given rooms | none |
 | `--faculty FILE` | the dates every instructor is not available on | none |
+| `--global-excluded FILE` | dates no exam of any course may be held on, for the whole institution | none |
+| `--enrollment FILE` | a `StudentID,CourseNumber` CSV of real enrollment, for conflicts the program/year model alone cannot see | none |
 | `--calendars DIR` | write one `.ics` per study program and year of the best system | none |
 | `--max-systems N` | keep at most the N best exam systems (`0` = no limit) | 1000 |
 | `--time-limit S` | stop the search after S seconds (`0` = no limit) | 30 |
@@ -331,6 +371,16 @@ records separated by a line holding `$$$$`.
   dates that instructor is not available on (version 3.0, optional).
 * `data/settings.txt` - the threshold requirements and the sorting criteria, one
   `name = value` per line (version 3.0, optional).
+* a global excluded dates file (`--global-excluded`) - the same record format
+  as `faculty_constraints.txt`, but every line of every record is a date line:
+  no instructor to name, since these dates apply to the whole institution
+  (`REQUIREMENTS-SCHEDULING-EXTENSION.md`, optional).
+* an enrollment file (`--enrollment`) - plain CSV, `StudentID,CourseNumber`,
+  one row per real enrollment fact, an optional header row
+  (`REQUIREMENTS-SCHEDULING-EXTENSION.md`, optional). No example ships in
+  `data/` for either of these two yet - a real one is at least a few rows of
+  `StudentID,CourseNumber` for whichever courses in `courses.txt` should be
+  checked against real enrollment.
 
 A course record may hold one more line after the evaluation: how many students
 the exam has to seat. Files without it are read exactly as before.
@@ -355,21 +405,28 @@ study year of the best exam system found.
 main.py                       command line interface (versions 1.0 and 3.0)
 schedule_forge/app.py         the application, free of interface code
 schedule_forge/settings.py    the thresholds and the sorting of version 3.0
-schedule_forge/model/         courses, exams, exam periods, programs, rooms
+schedule_forge/model/         courses, exams, exam periods, programs, rooms,
+                               enrollment (part XIII)
 schedule_forge/data_io/       parsers of the data files, output and .ics writers
-schedule_forge/scheduling/    exams, rules, decomposition, thresholds, search
+schedule_forge/scheduling/    exams, rules, decomposition, thresholds, search,
+                               time-slot colouring (part XIII)
 tests/                        unit tests
 data/                         example data files
 web/                          the screens (React, TypeScript)
 web/src/engine/               the same engine, carried over to the browser,
                                plus the colour tags, the drag & drop legality,
                                CSV import, hour-of-day assignment, notification
-                               drafts and the benchmark history (part VII)
+                               drafts, the benchmark history (part VII) and
+                               time-slot colouring (part XIII)
 web/src/screens/              the settings and output screens
 web/src/components/           the input screens, the calendar, the collaboration panel
 web/src/collab/               the client half of the real-time collaboration protocol
-server/                       the real-time collaboration relay (Node, optional)
+server/                       accounts, places, the published schedule and the
+                               real-time collaboration relay (Node, optional -
+                               part IX, part X, part XII)
 ```
 
 `DESIGN.md` describes the classes and the way they work together (part I), the
-screens of version 2.0 (part II), and the eleven upgrades of part VII.
+screens of version 2.0 (part II), the eleven upgrades of part VII, access
+control and hardening (parts IX, X, XII), and the five scheduling factors of
+part XIII.
