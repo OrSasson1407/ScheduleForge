@@ -38,19 +38,42 @@ before(async () => {
   throw new Error("server did not become healthy in time");
 });
 
+// `WebSocketServer.close()` only stops accepting new connections and waits
+// for every existing one to close on its own - it does not terminate them
+// (ws's own doc comment on `close()` says so explicitly). A test that throws
+// or times out before reaching its own `.close()` calls therefore leaves a
+// socket open on both ends forever, and since nothing here ever forces it
+// shut, `after` below hangs waiting for a `'close'` event that would never
+// come, and so does the whole `node --test` process - exactly what turned
+// one flaky "timed out waiting for a message" failure into a CI job stuck
+// for hours instead of a failing test. Tracking every socket this file opens
+// and force-terminating whichever ones are still open, regardless of why,
+// is what makes a single test's failure cost seconds instead of hours.
+const openSockets = new Set();
+
 after(() => {
+  for (const ws of openSockets) ws.terminate();
   serverModule.wss.close();
   serverModule.server.close();
 });
 
 function connect() {
-  return new WebSocket(wsBase);
+  const ws = new WebSocket(wsBase);
+  openSockets.add(ws);
+  ws.once("close", () => openSockets.delete(ws));
+  return ws;
 }
 
 /** Resolves with the next parsed JSON message received on `ws`. */
 function nextMessage(ws) {
   return new Promise((resolve, reject) => {
-    const timer = setTimeout(() => reject(new Error("timed out waiting for a message")), 3000);
+    // A shared CI runner has the Firestore emulator, this server and several
+    // concurrent sockets competing for the same CPU; 3000ms occasionally
+    // was not enough headroom for a broadcast to arrive under that
+    // contention, the same class of slow-first-request problem `before`
+    // above already gives 150 * 200ms for. This is a generous ceiling, not
+    // a real expectation of the relay ever taking this long.
+    const timer = setTimeout(() => reject(new Error("timed out waiting for a message")), 10000);
     ws.once("message", (raw) => {
       clearTimeout(timer);
       resolve(JSON.parse(raw.toString()));
@@ -224,9 +247,21 @@ test("moving a locked exam broadcasts the move and releases the lock", async () 
   await opened(observer);
   await join(observer, room, "Bob", "viewer");
 
+  // Both listeners must be attached before the lock is sent, not one at a
+  // time: the server broadcasts to editor and observer together, so
+  // awaiting editor's copy first and only then listening for observer's own
+  // (as this used to) races the broadcast - `ws` fires `message` the moment
+  // a frame arrives regardless of whether anything is listening yet, so a
+  // `once` handler attached too late silently misses it, and the next
+  // `nextMessage(observer)` call then hangs waiting for a message that was
+  // already delivered and dropped, until it times out - a real, reproducible
+  // bug in this test, not CI flakiness, that a longer timeout alone would
+  // never fix.
+  const editorLockChanged = nextMessage(editor);
+  const observerLockChanged = nextMessage(observer); // the observer's own lock-changed broadcast
   editor.send(JSON.stringify({ type: "lock", examId: "exam-1" }));
-  await nextMessage(editor);
-  await nextMessage(observer); // the observer's own lock-changed broadcast
+  await editorLockChanged;
+  await observerLockChanged;
 
   const movedPromise = nextMessage(observer);
   editor.send(JSON.stringify({ type: "move", examId: "exam-1", date: "2026-03-15" }));
