@@ -217,6 +217,19 @@ export function parseFacultyConstraints(text: string): FacultyRules {
   return rules;
 }
 
+// --- the global excluded dates file (optional) -----------------------------
+
+/**
+ * Dates on which no exam of any course may take place, for the whole
+ * institution - unlike the staff constraints file, no header line names
+ * anything, since every line of every record is a date line.
+ */
+export function parseGlobalExcluded(text: string): ExcludedDates[] {
+  const records = readRecords(text);
+  if (!records.length) throw new DataFileError(t("errors.globalExcludedFileEmpty"));
+  return records.flatMap((record) => record.map(parseExcluded));
+}
+
 function parseEnrollment(line: Line): ProgramEnrollment {
   const fields = line.text.split(",").map((field) => field.trim());
   if (fields.length !== 4) {

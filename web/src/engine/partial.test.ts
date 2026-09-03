@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { PartialThresholdChecker } from "./partial";
-import { Exam, Requirement } from "./model";
+import { EnrollmentRoster, Exam, Requirement } from "./model";
 import { DEFAULT_SETTINGS, Settings } from "./settings";
 
 let nextId = 0;
@@ -42,6 +42,33 @@ describe("PartialThresholdChecker.isNeeded", () => {
   it("is true when a total room capacity is given, even with no active thresholds", () => {
     const checker = new PartialThresholdChecker([], [], settings(), 100);
     expect(checker.isNeeded).toBe(true);
+  });
+  it("is true when maxExamsPerWindow is set", () => {
+    const checker = new PartialThresholdChecker(
+      [],
+      [],
+      settings({ maxExamsPerWindow: 2, windowDays: 3 }),
+      null
+    );
+    expect(checker.isNeeded).toBe(true);
+  });
+  it("is true when enforceTimeSlots is on with slots configured", () => {
+    const checker = new PartialThresholdChecker(
+      [],
+      [],
+      settings({ enforceTimeSlots: true, timeSlots: ["09:00"] }),
+      null
+    );
+    expect(checker.isNeeded).toBe(true);
+  });
+  it("is false when timeSlots is set but enforceTimeSlots is off (the cosmetic-only default)", () => {
+    const checker = new PartialThresholdChecker(
+      [],
+      [],
+      settings({ enforceTimeSlots: false, timeSlots: ["09:00", "13:00"] }),
+      null
+    );
+    expect(checker.isNeeded).toBe(false);
   });
 });
 
@@ -275,6 +302,189 @@ describe("PartialThresholdChecker.apply - minObligatorySpan", () => {
     ).toBe(true);
     // Last exam completes the group; span is first-to-last = 2026-01-01 to 2026-01-10 = 9 days.
     expect(checker.apply(1, [[2, "2026-01-10"]])).toBe(true);
+  });
+});
+
+describe("PartialThresholdChecker.apply / unapply - maxExamsPerWindow", () => {
+  function threeObligatoryExams() {
+    return [
+      exam([{ programNumber: "83101", year: 1, requirement: "Obligatory" }]),
+      exam([{ programNumber: "83101", year: 1, requirement: "Obligatory" }]),
+      exam([{ programNumber: "83101", year: 1, requirement: "Obligatory" }]),
+    ];
+  }
+
+  it("rejects a third exam of the same program/year inside one window", () => {
+    const exams = threeObligatoryExams();
+    const checker = new PartialThresholdChecker(
+      exams,
+      [0, 0, 0],
+      settings({ maxExamsPerWindow: 2, windowDays: 3 }),
+      null
+    );
+    const ok = checker.apply(0, [
+      [0, "2026-01-01"],
+      [1, "2026-01-02"],
+      [2, "2026-01-03"],
+    ]);
+    expect(ok).toBe(false);
+  });
+
+  it("allows a third exam far enough outside the window", () => {
+    const exams = threeObligatoryExams();
+    const checker = new PartialThresholdChecker(
+      exams,
+      [0, 0, 0],
+      settings({ maxExamsPerWindow: 2, windowDays: 3 }),
+      null
+    );
+    const ok = checker.apply(0, [
+      [0, "2026-01-01"],
+      [1, "2026-01-02"],
+      [2, "2026-01-10"],
+    ]);
+    expect(ok).toBe(true);
+  });
+
+  it("does not restrict exams of a different program or year", () => {
+    const exams = [
+      exam([{ programNumber: "83101", year: 1, requirement: "Obligatory" }]),
+      exam([{ programNumber: "83102", year: 1, requirement: "Obligatory" }]),
+      exam([{ programNumber: "83103", year: 1, requirement: "Obligatory" }]),
+    ];
+    const checker = new PartialThresholdChecker(
+      exams,
+      [0, 0, 0],
+      settings({ maxExamsPerWindow: 1, windowDays: 3 }),
+      null
+    );
+    const ok = checker.apply(0, [
+      [0, "2026-01-01"],
+      [1, "2026-01-01"],
+      [2, "2026-01-01"],
+    ]);
+    expect(ok).toBe(true);
+  });
+
+  it("unapply frees up the window so a later apply can succeed again", () => {
+    const exams = threeObligatoryExams();
+    const checker = new PartialThresholdChecker(
+      exams,
+      [0, 0, 0],
+      settings({ maxExamsPerWindow: 2, windowDays: 3 }),
+      null
+    );
+    expect(
+      checker.apply(0, [
+        [0, "2026-01-01"],
+        [1, "2026-01-02"],
+        [2, "2026-01-03"],
+      ])
+    ).toBe(false);
+    checker.unapply(0);
+    expect(
+      checker.apply(0, [
+        [0, "2026-01-01"],
+        [1, "2026-01-02"],
+        [2, "2026-01-10"],
+      ])
+    ).toBe(true);
+  });
+});
+
+describe("PartialThresholdChecker.apply / unapply - enforceTimeSlots", () => {
+  it("rejects a date that cannot be colored with the slots given", () => {
+    const first = exam([{ programNumber: "83101", year: 1, requirement: "Obligatory" }]);
+    const second = exam([{ programNumber: "83101", year: 1, requirement: "Elective" }]);
+    const checker = new PartialThresholdChecker(
+      [first, second],
+      [0, 0],
+      settings({ enforceTimeSlots: true, timeSlots: ["09:00"] }),
+      null
+    );
+    expect(
+      checker.apply(0, [
+        [0, "2026-01-01"],
+        [1, "2026-01-01"],
+      ])
+    ).toBe(false);
+  });
+
+  it("allows a date that can be colored with the slots given", () => {
+    const first = exam([{ programNumber: "83101", year: 1, requirement: "Obligatory" }]);
+    const second = exam([{ programNumber: "83101", year: 1, requirement: "Elective" }]);
+    const checker = new PartialThresholdChecker(
+      [first, second],
+      [0, 0],
+      settings({ enforceTimeSlots: true, timeSlots: ["09:00", "13:00"] }),
+      null
+    );
+    expect(
+      checker.apply(0, [
+        [0, "2026-01-01"],
+        [1, "2026-01-01"],
+      ])
+    ).toBe(true);
+  });
+
+  it("does not restrict two non-conflicting exams sharing a date, even with one slot", () => {
+    const first = exam([{ programNumber: "83101", year: 1, requirement: "Obligatory" }]);
+    const second = exam([{ programNumber: "83102", year: 1, requirement: "Obligatory" }]);
+    const checker = new PartialThresholdChecker(
+      [first, second],
+      [0, 0],
+      settings({ enforceTimeSlots: true, timeSlots: ["09:00"] }),
+      null
+    );
+    expect(
+      checker.apply(0, [
+        [0, "2026-01-01"],
+        [1, "2026-01-01"],
+      ])
+    ).toBe(true);
+  });
+
+  it("unapply clears the date's exam cache so a later apply is judged fresh", () => {
+    const first = exam([{ programNumber: "83101", year: 1, requirement: "Obligatory" }]);
+    const second = exam([{ programNumber: "83101", year: 1, requirement: "Elective" }]);
+    const checker = new PartialThresholdChecker(
+      [first, second],
+      [0, 0],
+      settings({ enforceTimeSlots: true, timeSlots: ["09:00"] }),
+      null
+    );
+    expect(
+      checker.apply(0, [
+        [0, "2026-01-01"],
+        [1, "2026-01-01"],
+      ])
+    ).toBe(false);
+    checker.unapply(0);
+    // A fresh placement on separate dates must now succeed.
+    expect(checker.apply(0, [[0, "2026-01-01"]])).toBe(true);
+    expect(checker.apply(1, [[1, "2026-01-02"]])).toBe(true);
+  });
+
+  it("uses the roster for a defense-in-depth conflict, even with no shared program/year", () => {
+    const first = exam([{ programNumber: "83101", year: 1, requirement: "Obligatory" }]);
+    const second = exam([{ programNumber: "83102", year: 1, requirement: "Obligatory" }]);
+    const roster: EnrollmentRoster = {
+      [first.course.number]: ["2021001"],
+      [second.course.number]: ["2021001"],
+    };
+    const checker = new PartialThresholdChecker(
+      [first, second],
+      [0, 0],
+      settings({ enforceTimeSlots: true, timeSlots: ["09:00"] }),
+      null,
+      roster
+    );
+    expect(
+      checker.apply(0, [
+        [0, "2026-01-01"],
+        [1, "2026-01-01"],
+      ])
+    ).toBe(false);
   });
 });
 

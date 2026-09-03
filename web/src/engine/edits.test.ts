@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   mergeCourses,
+  mergeEnrollment,
   mergeFaculty,
   mergePeriods,
   mergeRooms,
@@ -8,7 +9,7 @@ import {
   setPeriodDates,
   toggleExcludedDay,
 } from "./edits";
-import { Course, ExamPeriod, FacultyRules, Room } from "./model";
+import { Course, EnrollmentRoster, ExamPeriod, FacultyRules, Room } from "./model";
 
 function course(number: string, name = "Course"): Course {
   return { number, name, instructor: "Dr. A", enrollments: [], evaluation: "Exam" };
@@ -76,6 +77,30 @@ describe("mergeFaculty", () => {
     const incoming: FacultyRules = { "Dr. A": [{ start: "2026-02-01", end: "2026-02-01", comment: "" }] };
     const result = mergeFaculty(existing, incoming);
     expect(result["Dr. A"]).toEqual(incoming["Dr. A"]);
+  });
+});
+
+describe("mergeEnrollment", () => {
+  it("adds a new course's roster to the existing one", () => {
+    const existing: EnrollmentRoster = { "83112": ["a"] };
+    const incoming: EnrollmentRoster = { "83113": ["b"] };
+    const result = mergeEnrollment(existing, incoming);
+    expect(result["83112"]).toEqual(["a"]);
+    expect(result["83113"]).toEqual(["b"]);
+  });
+
+  it("unions students for a course present in both, without duplicates", () => {
+    const existing: EnrollmentRoster = { "83112": ["a", "b"] };
+    const incoming: EnrollmentRoster = { "83112": ["b", "c"] };
+    expect(mergeEnrollment(existing, incoming)["83112"]).toEqual(["a", "b", "c"]);
+  });
+
+  it("does not mutate either argument", () => {
+    const existing: EnrollmentRoster = { "83112": ["a"] };
+    const incoming: EnrollmentRoster = { "83112": ["b"] };
+    mergeEnrollment(existing, incoming);
+    expect(existing["83112"]).toEqual(["a"]);
+    expect(incoming["83112"]).toEqual(["b"]);
   });
 });
 

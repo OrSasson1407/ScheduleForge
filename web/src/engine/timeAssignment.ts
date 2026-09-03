@@ -23,9 +23,10 @@
  * read.
  */
 
-import { Exam, ExamSystem } from "./model";
+import { EnrollmentRoster, Exam, ExamSystem } from "./model";
 import { RoomAllocation } from "./rooms";
 import { Settings } from "./settings";
+import { colorDay } from "./timeSlots";
 
 export interface TimeBooking {
   start: string; // "HH:MM"
@@ -72,13 +73,55 @@ function durationOf(_exam: Exam, settings: Settings): number {
   return settings.defaultExamMinutes;
 }
 
+/**
+ * Item 2, on - `timeSlots` is now a real constraint a search already
+ * enforced, not a display nicety, so `system` came out of a search that
+ * proved every date colourable. Recomputed here independently rather than
+ * cached anywhere: the pruner that proved it is one mutable object that kept
+ * mutating past this candidate as the search continued, so nothing about its
+ * state at judgement time reliably describes this system by the time the
+ * user is looking at it - and a hand-edited system (`edit.ts`) has no such
+ * guarantee at all, so it has to be recoloured fresh regardless.
+ */
+function assignEnforced(system: ExamSystem, settings: Settings, roster?: EnrollmentRoster): TimeAssignment {
+  const slots = settings.timeSlots;
+  const byDate = new Map<string, ExamSystem>();
+  for (const scheduled of system) {
+    const list = byDate.get(scheduled.date) ?? [];
+    list.push(scheduled);
+    byDate.set(scheduled.date, list);
+  }
+
+  const bookings = new Map<string, TimeBooking>();
+  const failures: string[] = [];
+
+  for (const [date, scheduledExams] of byDate) {
+    const exams = scheduledExams.map((scheduled) => scheduled.exam);
+    const colors = colorDay(exams, slots.length, roster);
+    if (!colors) {
+      failures.push(
+        `${date} needs more than ${slots.length} time slot(s) to keep every conflicting exam apart`
+      );
+      continue;
+    }
+    for (const scheduled of scheduledExams) {
+      const start = slots[colors.get(scheduled.exam.id)!];
+      bookings.set(scheduled.exam.id, { start, end: addMinutes(start, durationOf(scheduled.exam, settings)) });
+    }
+  }
+
+  return { bookings, failures, isComplete: failures.length === 0 };
+}
+
 export function assignTimes(
   system: ExamSystem,
   settings: Settings,
-  allocation: RoomAllocation | null
+  allocation: RoomAllocation | null,
+  roster?: EnrollmentRoster
 ): TimeAssignment {
   const slots = settings.timeSlots;
   if (!slots.length || !system.length) return EMPTY_ASSIGNMENT;
+  if (settings.enforceTimeSlots) return assignEnforced(system, settings, roster);
 
   const byDate = new Map<string, ExamSystem>();
   for (const scheduled of system) {

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { parseCoursesCsv, parsePeriodsCsv } from "./csvImport";
+import { parseCoursesCsv, parseEnrollmentCsv, parsePeriodsCsv } from "./csvImport";
 import { DataFileError } from "./parsers";
 
 function csvField(value: string): string {
@@ -249,5 +249,47 @@ describe("parsePeriodsCsv", () => {
   it("throws for an invalid Moed", () => {
     const text = csv(PERIOD_HEADER, [periodRow({ Moed: "DALET" })]);
     expect(() => parsePeriodsCsv(text)).toThrow(DataFileError);
+  });
+});
+
+const ENROLLMENT_HEADER = ["StudentID", "CourseNumber"];
+
+describe("parseEnrollmentCsv", () => {
+  it("builds a roster of course number to the students enrolled in it", () => {
+    const text = csv(ENROLLMENT_HEADER, [
+      ["2021001", "83112"],
+      ["2021001", "83113"],
+      ["2021002", "83112"],
+    ]);
+    const roster = parseEnrollmentCsv(text);
+    expect(roster["83112"]).toEqual(["2021001", "2021002"]);
+    expect(roster["83113"]).toEqual(["2021001"]);
+  });
+
+  it("does not repeat a student twice for the same course", () => {
+    const text = csv(ENROLLMENT_HEADER, [
+      ["2021001", "83112"],
+      ["2021001", "83112"],
+    ]);
+    expect(parseEnrollmentCsv(text)["83112"]).toEqual(["2021001"]);
+  });
+
+  it("throws when StudentID is empty", () => {
+    const text = csv(ENROLLMENT_HEADER, [["", "83112"]]);
+    expect(() => parseEnrollmentCsv(text)).toThrow(DataFileError);
+  });
+
+  it("throws when CourseNumber is empty", () => {
+    const text = csv(ENROLLMENT_HEADER, [["2021001", ""]]);
+    expect(() => parseEnrollmentCsv(text)).toThrow(DataFileError);
+  });
+
+  it("throws when the file holds only a header", () => {
+    const text = csv(ENROLLMENT_HEADER, []);
+    expect(() => parseEnrollmentCsv(text)).toThrow(DataFileError);
+  });
+
+  it("throws when the file is entirely empty", () => {
+    expect(() => parseEnrollmentCsv("")).toThrow(DataFileError);
   });
 });

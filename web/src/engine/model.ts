@@ -66,6 +66,23 @@ export function isInstructorAvailable(
   return !blocked.some((rule) => rule.start <= iso && iso <= rule.end);
 }
 
+/**
+ * Real per-student enrollment (an optional input): course number -> the
+ * student ids enrolled in it. A plain object, not a `Map`, since `StoredData`
+ * round-trips through `JSON.stringify` - the same shape as `FacultyRules`.
+ */
+export type EnrollmentRoster = Record<string, string[]>;
+
+export function sharesStudents(roster: EnrollmentRoster, courseA: string, courseB: string): boolean {
+  const studentsA = roster[courseA];
+  if (!studentsA || !studentsA.length) return false;
+  if (courseA === courseB) return true;
+  const studentsB = roster[courseB];
+  if (!studentsB || !studentsB.length) return false;
+  const setB = new Set(studentsB);
+  return studentsA.some((student) => setB.has(student));
+}
+
 /** A single date, or a range of dates, on which no exam may take place. */
 export interface ExcludedDates {
   start: string;
@@ -168,4 +185,14 @@ export function availableDates(period: ExamPeriod): string[] {
   return datesBetween(period.startDate, period.endDate).filter(
     (iso) => !isExcluded(period, iso)
   );
+}
+
+/**
+ * Adds institution-wide excluded dates (a separate, optional file) to every
+ * period. Non-mutating: returns new period objects, since `periods` is also
+ * the array shown and edited directly on the input screen.
+ */
+export function applyGlobalExcluded(periods: ExamPeriod[], excluded: ExcludedDates[]): ExamPeriod[] {
+  if (!excluded.length) return periods;
+  return periods.map((period) => ({ ...period, excluded: [...period.excluded, ...excluded] }));
 }

@@ -21,8 +21,9 @@ from .errors import DataFileError
 
 _WHOLE_NUMBERS = ("min_days_between_obligatory", "min_days_between_any",
                   "max_elective_collisions", "min_obligatory_span",
-                  "max_exams_per_day", "max_candidates", "max_examined",
-                  "default_students")
+                  "max_exams_per_day", "min_gap_between_moeds",
+                  "max_exams_per_window", "window_days", "max_candidates",
+                  "max_examined", "default_students")
 _DECIMALS = ("time_limit_seconds",)
 _FLAGS = ("require_rooms",)
 _TRUE = ("yes", "true", "on", "1")
@@ -75,6 +76,8 @@ class SettingsParser(object):
 
     def _convert(self, name, value, line):
         if name == "sort":
+            return [item.strip() for item in value.split(",") if item.strip()]
+        if name == "time_slots":
             return [item.strip() for item in value.split(",") if item.strip()]
         if name in _FLAGS:
             if value.lower() in _TRUE:

@@ -28,16 +28,20 @@ not.
 import heapq
 import time
 
+from .time_slots import TimeSlotAssigner
+
 
 class Candidate(object):
     """One exam system that passed the thresholds, with what is known about it."""
 
-    __slots__ = ("system", "metrics", "allocation")
+    __slots__ = ("system", "metrics", "allocation", "time_slots")
 
-    def __init__(self, system, metrics, allocation=None):
+    def __init__(self, system, metrics, allocation=None, time_slots=None):
         self.system = system
         self.metrics = metrics
         self.allocation = allocation
+        #: ScheduledExam -> time string ("09:00"), or None when item 2 is off.
+        self.time_slots = time_slots
 
 
 class SearchReport(object):
@@ -90,11 +94,14 @@ class CandidateSearch(object):
 
     _TIME_CHECK_INTERVAL = 256
 
-    def __init__(self, generator, evaluator, settings, room_allocator=None):
+    def __init__(self, generator, evaluator, settings, room_allocator=None,
+                 roster=None):
         self.generator = generator
         self.evaluator = evaluator
         self.settings = settings
         self.room_allocator = room_allocator
+        self.time_slot_assigner = (TimeSlotAssigner(settings.time_slots, roster)
+                                   if settings.time_slots else None)
         self.report = SearchReport()
         self.candidates = []
 
@@ -197,4 +204,19 @@ class CandidateSearch(object):
             allocation = self.room_allocator.allocate(system)
             if self.settings.require_rooms and not allocation.is_complete:
                 return None
-        return Candidate(system, metrics, allocation)
+        time_slots = None
+        if self.time_slot_assigner is not None:
+            # A stateless, independent pass - never read off the pruner's own
+            # cache, which is one mutable object that keeps mutating past
+            # whatever candidate was just accepted as the walk continues, so
+            # its state the moment a candidate is judged does not reliably
+            # describe *that* candidate. Should never actually fail here: a
+            # system that reached this point already had every date proven
+            # colourable by the very same rule, enforced during the walk
+            # (`PartialThresholdChecker`) - this recomputes it independently
+            # rather than trusting that, the same caution `RoomAllocator`
+            # above already applies to room capacity.
+            time_slots = self.time_slot_assigner.assign(system)
+            if time_slots is None:
+                return None
+        return Candidate(system, metrics, allocation, time_slots)

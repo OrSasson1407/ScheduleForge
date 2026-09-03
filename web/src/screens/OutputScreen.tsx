@@ -37,6 +37,7 @@ import { legalDatesFor } from "../engine/edit";
 import { Candidate, SearchReport, describeSearch } from "../engine/generator";
 import { calendarsOf } from "../engine/ics";
 import {
+  EnrollmentRoster,
   Exam,
   ExamPeriod,
   ExamSystem,
@@ -62,6 +63,7 @@ interface Props {
   periods: ExamPeriod[];
   rooms: Room[];
   faculty: FacultyRules;
+  roster: EnrollmentRoster;
   programs: StudyProgram[];
   selectedPrograms: string[];
   programColors: ProgramColors;
@@ -145,6 +147,7 @@ export function OutputScreen({
   periods,
   rooms,
   faculty,
+  roster,
   programs,
   selectedPrograms,
   programColors,
@@ -186,15 +189,15 @@ export function OutputScreen({
     () => (rooms.length ? new RoomAllocator(rooms, settings.defaultStudents) : null),
     [rooms, settings.defaultStudents]
   );
-  const metrics = useMemo(() => measure(system), [system]);
+  const metrics = useMemo(() => measure(system, settings.windowDays), [system, settings.windowDays]);
   const allocation = useMemo(
     () => (roomAllocator ? roomAllocator.allocate(system) : null),
     [roomAllocator, system]
   );
   const utilization = useMemo(() => roomUtilization(system, roomAllocator), [system, roomAllocator]);
   const timeAssignment: TimeAssignment = useMemo(
-    () => assignTimes(system, settings, allocation),
-    [system, settings, allocation]
+    () => assignTimes(system, settings, allocation, roster),
+    [system, settings, allocation, roster]
   );
   const matched = useMemo(() => matchingExamIds(system, query), [system, query]);
   const scheduleChanges = useMemo(
@@ -281,7 +284,7 @@ export function OutputScreen({
     const holder = collabLocks[exam.id];
     if (holder && holder.clientId !== myClientId) return; // someone else is already dragging it
     if (collabConnected) onRequestLock(exam.id);
-    const legalDates = legalDatesFor({ exam, system, periods, settings, faculty, roomAllocator });
+    const legalDates = legalDatesFor({ exam, system, periods, settings, faculty, roomAllocator, roster });
     setDrag({ examId: exam.id, legalDates });
   };
 

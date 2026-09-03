@@ -5,9 +5,11 @@ of version 2.0 and the command line of version 1.0 drive the very same object.
 """
 
 from .data_io.courses_parser import CoursesParser
+from .data_io.enrollment_parser import EnrollmentParser
 from .data_io.exam_periods_parser import ExamPeriodsParser
 from .data_io.exam_system_writer import ExamSystemWriter
 from .data_io.faculty_parser import FacultyConstraintsParser
+from .data_io.global_excluded_parser import GlobalExcludedDatesParser, merge_into
 from .data_io.ics_writer import CalendarExporter
 from .data_io.programs_parser import ProgramsParser
 from .data_io.rooms_parser import RoomsParser
@@ -36,7 +38,7 @@ class RunResult(object):
 
     def __init__(self, selected_programs, courses, exams, candidates,
                  total_systems, report, output_path, settings, rooms=(),
-                 availability=None, calendar_paths=()):
+                 availability=None, calendar_paths=(), roster=None):
         self.selected_programs = selected_programs
         self.courses = courses
         self.exams = exams
@@ -48,6 +50,7 @@ class RunResult(object):
         self.rooms = list(rooms)
         self.availability = availability
         self.calendar_paths = list(calendar_paths)
+        self.roster = roster
 
     @property
     def systems_written(self):
@@ -66,7 +69,7 @@ class ScheduleForgeApp(object):
     def __init__(self, courses_path, periods_path, programs_path, output_path,
                  rooms_path=None, faculty_path=None, settings_path=None,
                  calendar_directory=None, settings=None, count_only=False,
-                 catalog=None):
+                 catalog=None, global_excluded_path=None, enrollment_path=None):
         self.courses_path = courses_path
         self.periods_path = periods_path
         self.programs_path = programs_path
@@ -74,6 +77,8 @@ class ScheduleForgeApp(object):
         self.rooms_path = rooms_path
         self.faculty_path = faculty_path
         self.settings_path = settings_path
+        self.global_excluded_path = global_excluded_path
+        self.enrollment_path = enrollment_path
         self.calendar_directory = calendar_directory
         self.settings = settings
         self.count_only = count_only
@@ -100,12 +105,16 @@ class ScheduleForgeApp(object):
         settings = self.read_settings()
         courses = CoursesParser(self.courses_path).parse()
         periods = ExamPeriodsParser(self.periods_path).parse()
+        if self.global_excluded_path:
+            merge_into(periods, GlobalExcludedDatesParser(self.global_excluded_path).parse())
         catalog = (self.catalog if self.catalog is not None
                   else StudyProgramCatalog.from_courses(courses))
         selected = ProgramsParser(self.programs_path, catalog).parse()
         rooms = RoomsParser(self.rooms_path).parse() if self.rooms_path else []
         availability = (FacultyConstraintsParser(self.faculty_path).parse()
                         if self.faculty_path else None)
+        roster = (EnrollmentParser(self.enrollment_path).parse()
+                 if self.enrollment_path else None)
 
         exams = ExamBuilder(courses, periods, selected).build()
         if not exams:
@@ -113,7 +122,8 @@ class ScheduleForgeApp(object):
                 "none of the courses of the selected study programs is "
                 "evaluated by an exam, so there is nothing to schedule")
 
-        generator = ExamSystemGenerator(exams, periods, constraints_for(settings),
+        generator = ExamSystemGenerator(exams, periods,
+                                        constraints_for(settings, roster),
                                         availability,
                                         diversify=bool(settings.sort_criteria))
         blocked = generator.decomposition.exams_without_dates()
@@ -133,16 +143,16 @@ class ScheduleForgeApp(object):
 
         if self.count_only:
             return RunResult(selected, courses, exams, [], total, None, None,
-                             settings, rooms, availability)
+                             settings, rooms, availability, roster=roster)
 
         pruner = PartialThresholdChecker(
             exams, generator.depth_of_position(), settings,
             allocator.total_capacity if allocator is not None else None,
-            settings.default_students)
+            settings.default_students, roster)
         generator.pruner = pruner if pruner.is_needed else None
 
         evaluator = SystemEvaluator(settings, allocator)
-        search = CandidateSearch(generator, evaluator, settings, allocator)
+        search = CandidateSearch(generator, evaluator, settings, allocator, roster)
         candidates = search.run()
 
         writer = ExamSystemWriter(self.output_path, catalog)
@@ -158,4 +168,4 @@ class ScheduleForgeApp(object):
 
         return RunResult(selected, courses, exams, candidates, total,
                          search.report, self.output_path, settings, rooms,
-                         availability, calendars)
+                         availability, calendars, roster)

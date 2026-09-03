@@ -11,6 +11,8 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from schedule_forge.data_io.errors import DataFileError
 from schedule_forge.data_io.settings_parser import SettingsParser
+from schedule_forge.settings import (CRITERION_DIRECTION, SORT_CRITERIA,
+                                     SORT_CRITERIA_TITLES, SchedulingSettings)
 
 
 class SettingsParserTestCase(unittest.TestCase):
@@ -43,6 +45,14 @@ class TestSettingsParser(SettingsParserTestCase):
         settings = self.parse("min_days_between_obligatory = 2\nmax_exams_per_day = 6")
         self.assertEqual(settings.min_days_between_obligatory, 2)
         self.assertEqual(settings.max_exams_per_day, 6)
+
+    def test_parses_min_gap_between_moeds(self):
+        settings = self.parse("min_gap_between_moeds = 4")
+        self.assertEqual(settings.min_gap_between_moeds, 4)
+
+    def test_min_gap_between_moeds_is_accepted_as_a_sort_criterion(self):
+        settings = self.parse("sort = min_gap_between_moeds")
+        self.assertEqual(settings.sort_criteria, ["min_gap_between_moeds"])
 
     def test_ignores_a_full_line_comment(self):
         settings = self.parse("# a comment\nmax_exams_per_day = 4")
@@ -184,6 +194,27 @@ class TestSettingsParser(SettingsParserTestCase):
         self.assertTrue(settings.require_rooms)
         self.assertEqual(settings.sort_criteria,
                          ["min_days_between_obligatory", "max_exams_per_day"])
+
+
+class TestSortCriteriaCompleteness(unittest.TestCase):
+    """Every criterion `constants.py` lists has to actually be usable, or a
+    run that names it in `sort` blows up with a KeyError instead of a
+    reported `SettingsError` - as `min_gap_between_moeds` briefly did here
+    before `CRITERION_DIRECTION` caught up with `SORT_CRITERIA`."""
+
+    def test_every_criterion_has_a_title(self):
+        for criterion in SORT_CRITERIA:
+            self.assertIn(criterion, SORT_CRITERIA_TITLES)
+
+    def test_every_criterion_has_a_direction(self):
+        for criterion in SORT_CRITERIA:
+            self.assertIn(CRITERION_DIRECTION.get(criterion), (1, -1))
+
+    def test_every_criterion_can_be_used_alone_without_error(self):
+        for criterion in SORT_CRITERIA:
+            settings = SchedulingSettings(sort_criteria=[criterion])
+            self.assertEqual([criterion], settings.sort_criteria)
+            settings.describe_sorting()  # must not raise KeyError
 
 
 if __name__ == "__main__":

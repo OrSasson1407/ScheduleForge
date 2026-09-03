@@ -17,6 +17,7 @@ from schedule_forge.data_io.ics_writer import CalendarExporter
 from schedule_forge.data_io.rooms_parser import RoomsParser
 from schedule_forge.data_io.settings_parser import SettingsParser
 from schedule_forge.model.course import Course, ProgramEnrollment
+from schedule_forge.model.enrollment import EnrollmentRoster
 from schedule_forge.model.enums import Evaluation, Moed, Requirement, Semester
 from schedule_forge.model.exam import Exam, ExamSystem, ScheduledExam
 from schedule_forge.model.availability import FacultyAvailability
@@ -25,7 +26,7 @@ from schedule_forge.model.room import Room
 from schedule_forge.scheduling.constraints import constraints_for
 from schedule_forge.scheduling.generator import ExamSystemGenerator
 from schedule_forge.scheduling.partial import PartialThresholdChecker
-from schedule_forge.scheduling.quality import SystemEvaluator
+from schedule_forge.scheduling.quality import NO_PAIR, SystemEvaluator
 from schedule_forge.scheduling.rooms import RoomAllocator
 from schedule_forge.scheduling.search import CandidateSearch, SearchReport
 from schedule_forge.settings import SchedulingSettings, SettingsError
@@ -310,6 +311,164 @@ class TestAggregateThresholds(unittest.TestCase):
             self.assertEqual(len(placed), len(set(placed)))
 
 
+class TestWindowThreshold(unittest.TestCase):
+    """2.7 - at most k exams of one program and year in any window_days span."""
+
+    def test_limits_exams_of_a_year_within_a_sliding_window(self):
+        exams = [exam("8311%d" % index, {("83101", 1): OBLIGATORY})
+                for index in range(4)]
+        search = run_search(exams, period(8),
+                            settings(max_exams_per_window=2, window_days=3))
+
+        self.assertTrue(search.candidates)
+        for candidate in search.candidates:
+            self.assertLessEqual(candidate.metrics.worst_window_count, 2)
+            dates = sorted(dates_of(candidate.system).values())
+            for start in dates:
+                end = start + timedelta(days=2)
+                count = sum(1 for d in dates if start <= d <= end)
+                self.assertLessEqual(count, 2)
+
+    def test_does_not_restrict_exams_of_a_different_program_or_year(self):
+        exams = [exam("83112", {("83101", 1): OBLIGATORY}),
+                 exam("83113", {("83102", 1): OBLIGATORY}),
+                 exam("83114", {("83103", 1): OBLIGATORY})]
+        search = run_search(exams, period(2),
+                            settings(max_exams_per_window=1, window_days=3))
+
+        self.assertTrue(search.candidates)
+        # window_days=1 per program/year is never broken here: the three
+        # exams never share a (program, year), so even two of them landing
+        # on the very same date is legal - the window only counts exams a
+        # single student's own study year actually carries.
+        for candidate in search.candidates:
+            self.assertEqual(1, candidate.metrics.worst_window_count)
+
+    def test_settings_reject_one_of_the_pair_without_the_other(self):
+        self.assertRaises(SettingsError,
+                          lambda: settings(max_exams_per_window=2))
+        self.assertRaises(SettingsError, lambda: settings(window_days=3))
+
+    def test_partial_threshold_checker_apply_unapply_is_symmetric(self):
+        """Direct coverage of the incremental counters, not only end to end:
+        after the component placed is fully unapplied, the window counters
+        must be empty again, exactly like every other counter in this class.
+        All three exams share slot (83101, 1), so a real walk places them as
+        one component - one `apply` call with every pair, same as here."""
+        exams = [exam("83112", {("83101", 1): OBLIGATORY}),
+                 exam("83113", {("83101", 1): OBLIGATORY}),
+                 exam("83114", {("83101", 1): OBLIGATORY})]
+        options = settings(max_exams_per_window=2, window_days=3)
+        checker = PartialThresholdChecker(exams, [0, 0, 0], options)
+
+        pairs = [(0, FIRST), (1, FIRST + timedelta(days=1)),
+                 (2, FIRST + timedelta(days=2))]
+        self.assertFalse(checker.apply(0, pairs))  # three exams in one 3-day window
+
+        checker.unapply(0)
+        self.assertEqual([], checker.window_dates[("83101", 1)])
+
+    def test_partial_threshold_checker_allows_a_third_exam_outside_the_window(self):
+        exams = [exam("83112", {("83101", 1): OBLIGATORY}),
+                 exam("83113", {("83101", 1): OBLIGATORY}),
+                 exam("83114", {("83101", 1): OBLIGATORY})]
+        options = settings(max_exams_per_window=2, window_days=3)
+        checker = PartialThresholdChecker(exams, [0, 0, 0], options)
+
+        pairs = [(0, FIRST), (1, FIRST + timedelta(days=1)),
+                 (2, FIRST + timedelta(days=10))]
+        self.assertTrue(checker.apply(0, pairs))
+
+
+class TestTimeSlotThreshold(unittest.TestCase):
+    """Item 2 - two exams that need different times on the same date are
+    rejected during the search itself, not merely displayed apart later."""
+
+    def test_rejects_a_day_that_cannot_be_colored_with_the_slots_given(self):
+        # Both elective in the same program/year: requirement 1.2's own rule
+        # allows them to share a date on its own - the point of this test is
+        # that the time-slot check adds a real, *additional* restriction: with
+        # only one slot, a date holding both is still rejected, so they must
+        # land on different dates despite 1.2 alone permitting the collision.
+        exams = [exam("83112", {("83101", 1): ELECTIVE}),
+                 exam("83113", {("83101", 1): ELECTIVE})]
+        options = settings(time_slots=["09:00"])
+        search = run_search(exams, period(3), options)
+
+        self.assertTrue(search.candidates)
+        for candidate in search.candidates:
+            placed = dates_of(candidate.system)
+            self.assertNotEqual(placed["83112"], placed["83113"])
+
+    def test_allows_two_conflicting_exams_on_the_same_day_with_enough_slots(self):
+        exams = [exam("83112", {("83101", 1): ELECTIVE}),
+                 exam("83113", {("83101", 1): ELECTIVE})]
+        options = settings(time_slots=["09:00", "13:00"])
+        search = run_search(exams, period(1), options)
+
+        self.assertTrue(search.candidates)
+        candidate = search.candidates[0]
+        placed = dates_of(candidate.system)
+        self.assertEqual(placed["83112"], placed["83113"])
+        times = set(candidate.time_slots.values())
+        self.assertEqual(2, len(times))
+
+    def test_candidates_carry_no_time_slots_when_the_setting_is_off(self):
+        exams = [exam("83112", {("83101", 1): OBLIGATORY})]
+        search = run_search(exams, period(2), settings())
+        self.assertIsNone(search.candidates[0].time_slots)
+
+    def test_partial_threshold_checker_apply_unapply_cache_invalidation(self):
+        """Direct coverage of the incremental coloring cache: after a
+        rejected placement is unapplied, the date's exam list must be empty
+        again, so a later placement is judged fresh rather than against
+        exams that were only ever hypothetically there."""
+        slot = {("83101", 1): OBLIGATORY}
+        exams = [exam("83112", slot), exam("83113", slot)]
+        options = settings(time_slots=["09:00"])
+        checker = PartialThresholdChecker(exams, [0, 0], options)
+
+        pairs = [(0, FIRST), (1, FIRST)]
+        self.assertFalse(checker.apply(0, pairs))  # 1 slot, 2 conflicting exams
+        self.assertEqual(2, len(checker.exams_on_date[FIRST]))
+
+        checker.unapply(0)
+        self.assertEqual([], checker.exams_on_date[FIRST])
+
+        # A fresh placement on a date with room for both must now succeed.
+        self.assertTrue(checker.apply(0, [(0, FIRST)]))
+        self.assertTrue(checker.apply(0, [(1, FIRST + timedelta(days=1))]))
+
+    def test_a_roster_alone_can_make_the_time_slot_coloring_fail(self):
+        """No day-level rule here at all (`constraints_for(None)`, no roster
+        passed to it - different programs are otherwise free to share a date)
+        - only the roster-aware coloring in `PartialThresholdChecker`/
+        `TimeSlotAssigner` has any reason to keep these two apart. One day,
+        one slot: if that coloring is genuinely roster-aware, the search can
+        find no legal system at all - not merely "different times", since
+        there is only one time to give and two exams that need to differ."""
+        exams = [exam("83112", {("83101", 1): OBLIGATORY}),
+                 exam("83113", {("83102", 1): OBLIGATORY})]
+        roster = EnrollmentRoster({"83112": {"2021001"}, "83113": {"2021001"}})
+        generator = ExamSystemGenerator(exams, period(1), constraints_for(None))
+        options = settings(time_slots=["09:00"])
+        pruner = PartialThresholdChecker(
+            exams, generator.depth_of_position(), options, roster=roster)
+        generator.pruner = pruner if pruner.is_needed else None
+        search = CandidateSearch(generator, SystemEvaluator(options), options,
+                                 roster=roster)
+        search.run()
+
+        self.assertEqual([], search.candidates)
+
+    def test_settings_reject_a_malformed_time_slot(self):
+        self.assertRaises(SettingsError, lambda: settings(time_slots=["9am"]))
+
+    def test_settings_reject_a_duplicate_time_slot(self):
+        self.assertRaises(SettingsError,
+                          lambda: settings(time_slots=["09:00", "09:00"]))
+
+
 class TestFacultyConstraints(unittest.TestCase):
 
     def test_no_exam_is_placed_on_a_day_its_instructor_is_away(self):
@@ -591,6 +750,25 @@ class TestMetrics(unittest.TestCase):
                          metrics.obligatory_span)
         self.assertEqual(1, metrics.max_exams_per_day)
         self.assertEqual(0, metrics.elective_collisions)
+
+    def test_min_gap_between_moeds_is_the_days_between_the_two_sittings(self):
+        aleph = exam("83112", {}, moed=Moed.ALEPH)
+        bet = exam("83112", {}, moed=Moed.BET)
+        system = ExamSystem([ScheduledExam(aleph, FIRST),
+                             ScheduledExam(bet, FIRST + timedelta(days=9))])
+
+        metrics = SystemEvaluator(settings()).measure(system)
+
+        self.assertEqual(9, metrics.min_gap_between_moeds)
+
+    def test_min_gap_between_moeds_is_no_pair_when_no_course_has_two_moedim(self):
+        exams = [exam("83112", {}), exam("83113", {})]
+        system = ExamSystem([ScheduledExam(exams[0], FIRST),
+                             ScheduledExam(exams[1], FIRST + timedelta(days=1))])
+
+        metrics = SystemEvaluator(settings()).measure(system)
+
+        self.assertEqual(NO_PAIR, metrics.min_gap_between_moeds)
 
 
 if __name__ == "__main__":

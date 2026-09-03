@@ -5,6 +5,7 @@ import {
   parseEvaluation,
   parseExamPeriods,
   parseFacultyConstraints,
+  parseGlobalExcluded,
   parseMoed,
   parseRequirement,
   parseRooms,
@@ -297,6 +298,29 @@ describe("parseFacultyConstraints", () => {
 
   it("throws when a date is not a real calendar date", () => {
     expect(() => parseFacultyConstraints("Dr. A\n32-01-2026")).toThrow(DataFileError);
+  });
+});
+
+describe("parseGlobalExcluded", () => {
+  it("reads every line as a date, with no header line", () => {
+    const excluded = parseGlobalExcluded("01-01-2026 closure\n05-01-2026,06-01-2026 retreat");
+    expect(excluded).toEqual([
+      { start: "2026-01-01", end: "2026-01-01", comment: "closure" },
+      { start: "2026-01-05", end: "2026-01-06", comment: "retreat" },
+    ]);
+  });
+
+  it("flattens several records into one flat list", () => {
+    const excluded = parseGlobalExcluded(`01-01-2026\n${SEP}\n02-01-2026\n03-01-2026`);
+    expect(excluded).toHaveLength(3);
+  });
+
+  it("throws on an empty file", () => {
+    expect(() => parseGlobalExcluded("")).toThrow(DataFileError);
+  });
+
+  it("throws when a date is not a real calendar date", () => {
+    expect(() => parseGlobalExcluded("32-01-2026")).toThrow(DataFileError);
   });
 });
 

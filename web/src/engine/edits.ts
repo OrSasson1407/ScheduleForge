@@ -6,7 +6,7 @@
  * (requirements 2.4.2 and 2.4.3).
  */
 
-import { Course, ExamPeriod, FacultyRules, Room, addDays, isExcluded, periodKey } from "./model";
+import { Course, EnrollmentRoster, ExamPeriod, ExcludedDates, FacultyRules, Room, addDays, isExcluded, periodKey } from "./model";
 import { translate as t } from "../i18n/translate";
 
 /** Requirement 2.1.3 - add records without erasing the ones already loaded. */
@@ -24,6 +24,20 @@ export function mergeRooms(existing: Room[], incoming: Room[]): Room[] {
 
 export function mergeFaculty(existing: FacultyRules, incoming: FacultyRules): FacultyRules {
   return { ...existing, ...incoming };
+}
+
+export function mergeGlobalExcluded(existing: ExcludedDates[], incoming: ExcludedDates[]): ExcludedDates[] {
+  return [...existing, ...incoming];
+}
+
+export function mergeEnrollment(existing: EnrollmentRoster, incoming: EnrollmentRoster): EnrollmentRoster {
+  const merged: EnrollmentRoster = { ...existing };
+  for (const [course, students] of Object.entries(incoming)) {
+    const combined = [...(merged[course] ?? [])];
+    for (const student of students) if (!combined.includes(student)) combined.push(student);
+    merged[course] = combined;
+  }
+  return merged;
 }
 
 export function mergePeriods(existing: ExamPeriod[], incoming: ExamPeriod[]): ExamPeriod[] {

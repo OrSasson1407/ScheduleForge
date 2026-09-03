@@ -8,16 +8,24 @@
 
 import { ReactNode, useRef, useState } from "react";
 import { Icon } from "./Icon";
-import { mergeCourses, mergeFaculty, mergePeriods, mergeRooms } from "../engine/edits";
-import { Course, ExamPeriod, FacultyRules, Room } from "../engine/model";
+import {
+  mergeCourses,
+  mergeEnrollment,
+  mergeFaculty,
+  mergeGlobalExcluded,
+  mergePeriods,
+  mergeRooms,
+} from "../engine/edits";
+import { Course, EnrollmentRoster, ExamPeriod, ExcludedDates, FacultyRules, Room } from "../engine/model";
 import {
   DataFileError,
   parseCourses,
   parseExamPeriods,
   parseFacultyConstraints,
+  parseGlobalExcluded,
   parseRooms,
 } from "../engine/parsers";
-import { parseCoursesCsv, parsePeriodsCsv } from "../engine/csvImport";
+import { parseCoursesCsv, parseEnrollmentCsv, parsePeriodsCsv } from "../engine/csvImport";
 import { useTranslation, LanguageContextValue } from "../i18n/LanguageContext";
 import { CoursesTable } from "./CoursesTable";
 import { RoomsTable } from "./RoomsTable";
@@ -30,14 +38,20 @@ interface Props {
   periods: ExamPeriod[];
   rooms: Room[];
   faculty: FacultyRules;
+  globalExcluded: ExcludedDates[];
+  enrollmentRoster: EnrollmentRoster;
   coursesFileName: string | null;
   periodsFileName: string | null;
   roomsFileName: string | null;
   facultyFileName: string | null;
+  globalExcludedFileName: string | null;
+  enrollmentRosterFileName: string | null;
   onCourses: (courses: Course[], fileName: string) => void;
   onPeriods: (periods: ExamPeriod[], fileName: string) => void;
   onRooms: (rooms: Room[], fileName: string) => void;
   onFaculty: (faculty: FacultyRules, fileName: string) => void;
+  onGlobalExcluded: (globalExcluded: ExcludedDates[], fileName: string) => void;
+  onEnrollmentRoster: (roster: EnrollmentRoster, fileName: string) => void;
   /** Live-table edits: the array changes directly, with no file behind it. */
   onCoursesChange: (courses: Course[]) => void;
   onRoomsChange: (rooms: Room[]) => void;
@@ -48,6 +62,8 @@ interface LoaderProps<T> {
   title: string;
   summary: string;
   optional?: boolean;
+  /** The primary file format read by the "Replace"/"Add" buttons - Appendix A `.txt` for most data types, but plain CSV for a type (like enrollment) that has no such text format of its own. */
+  accept?: string;
   parse: (text: string) => T;
   parseCsv?: (text: string) => T;
   replace: (incoming: T, fileName: string) => void;
@@ -56,7 +72,17 @@ interface LoaderProps<T> {
   manualEditor?: ReactNode;
 }
 
-function FileLoader<T>({ title, summary, optional, parse, parseCsv, replace, add, manualEditor }: LoaderProps<T>) {
+function FileLoader<T>({
+  title,
+  summary,
+  optional,
+  accept = ".txt,text/plain",
+  parse,
+  parseCsv,
+  replace,
+  add,
+  manualEditor,
+}: LoaderProps<T>) {
   const { t } = useTranslation();
   const inputRef = useRef<HTMLInputElement>(null);
   const csvInputRef = useRef<HTMLInputElement>(null);
@@ -121,7 +147,7 @@ function FileLoader<T>({ title, summary, optional, parse, parseCsv, replace, add
         )}
         <input
           type="file"
-          accept=".txt,text/plain"
+          accept={accept}
           ref={inputRef}
           hidden
           onChange={(event) => {
@@ -232,6 +258,44 @@ export function FilesSection(props: Props) {
             props.onFaculty(mergeFaculty(props.faculty, incoming), fileName)
           }
           manualEditor={<FacultyTable faculty={props.faculty} onChange={props.onFacultyChange} />}
+        />
+        <FileLoader<ExcludedDates[]>
+          title={t("files.globalExcludedTitle")}
+          optional
+          summary={
+            props.globalExcluded.length
+              ? props.globalExcludedFileName
+                ? t("files.globalExcludedSummaryLoaded", { count: props.globalExcluded.length, fileName: props.globalExcludedFileName })
+                : t("files.globalExcludedSummaryLoadedNoFile", { count: props.globalExcluded.length })
+              : t("files.globalExcludedSummaryEmpty")
+          }
+          parse={parseGlobalExcluded}
+          replace={(incoming, fileName) => props.onGlobalExcluded(incoming, fileName)}
+          add={(incoming, fileName) =>
+            props.onGlobalExcluded(mergeGlobalExcluded(props.globalExcluded, incoming), fileName)
+          }
+        />
+        <FileLoader<EnrollmentRoster>
+          title={t("files.enrollmentTitle")}
+          optional
+          accept=".csv,text/csv"
+          summary={
+            Object.keys(props.enrollmentRoster).length
+              ? props.enrollmentRosterFileName
+                ? t("files.enrollmentSummaryLoaded", {
+                    count: Object.keys(props.enrollmentRoster).length,
+                    fileName: props.enrollmentRosterFileName,
+                  })
+                : t("files.enrollmentSummaryLoadedNoFile", {
+                    count: Object.keys(props.enrollmentRoster).length,
+                  })
+              : t("files.enrollmentSummaryEmpty")
+          }
+          parse={parseEnrollmentCsv}
+          replace={(incoming, fileName) => props.onEnrollmentRoster(incoming, fileName)}
+          add={(incoming, fileName) =>
+            props.onEnrollmentRoster(mergeEnrollment(props.enrollmentRoster, incoming), fileName)
+          }
         />
       </div>
     </div>

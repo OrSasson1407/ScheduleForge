@@ -26,7 +26,7 @@
 
 import { parseEvaluation, parseMoed, parseRequirement, parseSemester } from "./parsers";
 import { DataFileError } from "./parsers";
-import { Course, ExamPeriod, ExcludedDates, ProgramEnrollment, fromDisplayDate } from "./model";
+import { Course, EnrollmentRoster, ExamPeriod, ExcludedDates, ProgramEnrollment, fromDisplayDate } from "./model";
 import { translate as t } from "../i18n/translate";
 
 interface Row {
@@ -214,4 +214,31 @@ export function parsePeriodsCsv(text: string): ExamPeriod[] {
 
   if (!byKey.size) throw new DataFileError(t("errors.csvNoPeriodRows"));
   return [...byKey.values()];
+}
+
+// --- enrollment (optional; item 1) ------------------------------------------
+
+/**
+ * Real per-student enrollment: one row per (student, course) fact.
+ *
+ *   StudentID, CourseNumber
+ *
+ * Neither the `.txt` Appendix A format nor the other data files carry any
+ * student-level data at all, so unlike courses/periods this has no plain-text
+ * sibling parser - CSV is the only format for it.
+ */
+export function parseEnrollmentCsv(text: string): EnrollmentRoster {
+  const rows = readRows(text);
+  const roster: EnrollmentRoster = {};
+
+  for (const row of rows) {
+    const student = required(row, "StudentID");
+    const course = required(row, "CourseNumber");
+    const students = roster[course] ?? [];
+    if (!students.includes(student)) students.push(student);
+    roster[course] = students;
+  }
+
+  if (!Object.keys(roster).length) throw new DataFileError(t("errors.csvNoEnrollmentRows"));
+  return roster;
 }

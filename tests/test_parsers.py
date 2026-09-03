@@ -13,8 +13,11 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from schedule_forge.data_io.courses_parser import CoursesParser
 from schedule_forge.data_io.errors import DataFileError
 from schedule_forge.data_io.exam_periods_parser import ExamPeriodsParser
+from schedule_forge.data_io.global_excluded_parser import (
+    GlobalExcludedDatesParser, merge_into)
 from schedule_forge.data_io.programs_parser import ProgramsParser
 from schedule_forge.model.enums import Evaluation, Moed, Requirement, Semester
+from schedule_forge.model.exam_period import ExamPeriod
 from schedule_forge.model.study_program import StudyProgramCatalog
 
 COURSES_FILE = """$$$$
@@ -124,6 +127,51 @@ class TestExamPeriodsParser(ParserTestCase):
         path = self.write("periods.txt",
                           PERIODS_FILE.replace("FALL, Aleph", "FALL, Daled"))
         self.assertRaises(DataFileError, ExamPeriodsParser(path).parse)
+
+
+GLOBAL_EXCLUDED_FILE = """$$$$
+01-02-2026 University closure
+$$$$
+14-03-2026, 15-03-2026 Purim
+"""
+
+
+class TestGlobalExcludedDatesParser(ParserTestCase):
+
+    def test_parses_every_record_as_a_flat_list_of_dates(self):
+        excluded = GlobalExcludedDatesParser(
+            self.write("global.txt", GLOBAL_EXCLUDED_FILE)).parse()
+
+        self.assertEqual(2, len(excluded))
+        self.assertEqual(date(2026, 2, 1), excluded[0].start)
+        self.assertEqual("University closure", excluded[0].comment)
+        self.assertEqual(date(2026, 3, 14), excluded[1].start)
+        self.assertEqual(date(2026, 3, 15), excluded[1].end)
+
+    def test_rejects_an_empty_file(self):
+        path = self.write("global.txt", "")
+        self.assertRaises(DataFileError, GlobalExcludedDatesParser(path).parse)
+
+    def test_rejects_a_malformed_date(self):
+        path = self.write("global.txt",
+                          GLOBAL_EXCLUDED_FILE.replace("01-02-2026", "31-13-2026"))
+        self.assertRaises(DataFileError, GlobalExcludedDatesParser(path).parse)
+
+    def test_merge_into_adds_the_dates_to_every_period(self):
+        periods = ExamPeriodsParser(self.write("periods.txt", PERIODS_FILE)).parse()
+        other = ExamPeriod(Semester.SPRING, Moed.BET,
+                           date(2026, 6, 1), date(2026, 6, 30))
+        periods[other.key] = other
+        excluded = GlobalExcludedDatesParser(
+            self.write("global.txt", GLOBAL_EXCLUDED_FILE)).parse()
+
+        merge_into(periods, excluded)
+
+        for period in periods.values():
+            self.assertEqual(2, len([rule for rule in period.excluded
+                                     if rule in excluded]))
+        self.assertNotIn(date(2026, 2, 1),
+                         periods[(Semester.FALL, Moed.ALEPH)].available_dates())
 
 
 def catalog_of(*numbers):

@@ -10,7 +10,7 @@
  * and one exam period, because that is the group of exams one student sits.
  */
 
-import { ExamSystem, fromIso } from "./model";
+import { addDays, ExamSystem, fromIso } from "./model";
 import { CRITERION_DIRECTION, SortCriterion } from "./settings";
 
 /** Stands for "there is no such pair", which is better than any real value. */
@@ -24,16 +24,20 @@ export interface SystemMetrics {
   worst_program_collisions: number;
   obligatory_span: number;
   max_exams_per_day: number;
+  min_gap_between_moeds: number;
+  worst_window_count: number;
 }
 
 function days(from: string, to: string): number {
   return Math.abs(Math.round((fromIso(to).getTime() - fromIso(from).getTime()) / 86400000));
 }
 
-export function measure(system: ExamSystem): SystemMetrics {
+export function measure(system: ExamSystem, windowDays?: number | null): SystemMetrics {
   const groups = new Map<string, { date: string; obligatory: boolean }[]>();
   const byDate = new Map<string, number>();
   const electives = new Map<string, Map<string, number>>();
+  const moedGroups = new Map<string, { moed: string; date: string }[]>();
+  const windowGroups = new Map<string, string[]>();
 
   for (const scheduled of system) {
     const exam = scheduled.exam;
@@ -48,7 +52,14 @@ export function measure(system: ExamSystem): SystemMetrics {
         dates.set(scheduled.date, (dates.get(scheduled.date) ?? 0) + 1);
         electives.set(slot.programNumber, dates);
       }
+      const windowList = windowGroups.get(slot.key) ?? [];
+      windowList.push(scheduled.date);
+      windowGroups.set(slot.key, windowList);
     }
+    const moedKey = `${exam.course.number}|${exam.semester}`;
+    const moedList = moedGroups.get(moedKey) ?? [];
+    moedList.push({ moed: exam.moed, date: scheduled.date });
+    moedGroups.set(moedKey, moedList);
   }
 
   let minObligatory = NO_PAIR;
@@ -86,6 +97,30 @@ export function measure(system: ExamSystem): SystemMetrics {
     worst = Math.max(worst, inProgram);
   }
 
+  let minMoedGap = NO_PAIR;
+  for (const entries of moedGroups.values()) {
+    for (let first = 0; first < entries.length; first += 1) {
+      for (let second = first + 1; second < entries.length; second += 1) {
+        if (entries[first].moed === entries[second].moed) continue;
+        const gap = days(entries[first].date, entries[second].date);
+        if (gap < minMoedGap) minMoedGap = gap;
+      }
+    }
+  }
+
+  let worstWindow = 0;
+  if (windowDays) {
+    for (const dates of windowGroups.values()) {
+      const sorted = [...dates].sort();
+      for (let i = 0; i < sorted.length; i += 1) {
+        const end = addDays(sorted[i], windowDays - 1);
+        let count = 0;
+        for (let j = i; j < sorted.length && sorted[j] <= end; j += 1) count += 1;
+        if (count > worstWindow) worstWindow = count;
+      }
+    }
+  }
+
   return {
     min_days_between_obligatory: minObligatory,
     min_days_between_exams: minAny,
@@ -94,6 +129,8 @@ export function measure(system: ExamSystem): SystemMetrics {
     worst_program_collisions: worst,
     obligatory_span: span,
     max_exams_per_day: Math.max(0, ...byDate.values()),
+    min_gap_between_moeds: minMoedGap,
+    worst_window_count: worstWindow,
   };
 }
 
@@ -104,6 +141,7 @@ export function passesThresholds(
     maxElectiveCollisions: number | null;
     minObligatorySpan: number | null;
     maxExamsPerDay: number | null;
+    maxExamsPerWindow?: number | null;
   }
 ): boolean {
   if (
@@ -120,6 +158,9 @@ export function passesThresholds(
     return false;
   }
   if (settings.maxExamsPerDay && metrics.max_exams_per_day > settings.maxExamsPerDay) {
+    return false;
+  }
+  if (settings.maxExamsPerWindow && metrics.worst_window_count > settings.maxExamsPerWindow) {
     return false;
   }
   return true;

@@ -6,6 +6,7 @@ import {
   SORT_CRITERIA,
   SORT_CRITERION_TITLES,
   Settings,
+  SortCriterion,
   describeThresholds,
   hasAggregateThresholds,
 } from "./settings";
@@ -14,6 +15,9 @@ function settings(overrides: Partial<Settings> = {}): Settings {
   return { ...DEFAULT_SETTINGS, ...overrides };
 }
 
+/** New, off-by-default criteria (3.6, 3.7) that must not join the default sort order. */
+const OPT_IN_CRITERIA: SortCriterion[] = ["min_gap_between_moeds", "worst_window_count"];
+
 describe("DEFAULT_SETTINGS", () => {
   it("has every threshold off by default", () => {
     expect(DEFAULT_SETTINGS.minDaysBetweenObligatory).toBeNull();
@@ -21,11 +25,23 @@ describe("DEFAULT_SETTINGS", () => {
     expect(DEFAULT_SETTINGS.maxElectiveCollisions).toBeNull();
     expect(DEFAULT_SETTINGS.minObligatorySpan).toBeNull();
     expect(DEFAULT_SETTINGS.maxExamsPerDay).toBeNull();
+    expect(DEFAULT_SETTINGS.minGapBetweenMoeds).toBeNull();
+    expect(DEFAULT_SETTINGS.maxExamsPerWindow).toBeNull();
+    expect(DEFAULT_SETTINGS.windowDays).toBeNull();
+    expect(DEFAULT_SETTINGS.enforceTimeSlots).toBe(false);
     expect(DEFAULT_SETTINGS.requireRooms).toBe(false);
   });
 
-  it("defaults sortCriteria to every criterion, in the declared order", () => {
-    expect(DEFAULT_SETTINGS.sortCriteria).toEqual(SORT_CRITERIA);
+  it("defaults sortCriteria to every criterion of version 3.0, in the declared order", () => {
+    // The two newest, off-by-default features are deliberately excluded: a
+    // new feature should not change tie-breaking for runs that never asked
+    // for it.
+    expect(DEFAULT_SETTINGS.sortCriteria).toEqual(
+      SORT_CRITERIA.filter((criterion) => !OPT_IN_CRITERIA.includes(criterion))
+    );
+    for (const criterion of OPT_IN_CRITERIA) {
+      expect(DEFAULT_SETTINGS.sortCriteria).not.toContain(criterion);
+    }
   });
 });
 
@@ -42,9 +58,17 @@ describe("SORT_CRITERIA / SORT_CRITERION_TITLES / CRITERION_DIRECTION", () => {
     }
   });
 
-  it("DEFAULT_SORT_CRITERIA is a copy, not the same array reference as SORT_CRITERIA", () => {
+  it("DEFAULT_SORT_CRITERIA holds every criterion except the off-by-default ones", () => {
     expect(DEFAULT_SORT_CRITERIA).not.toBe(SORT_CRITERIA);
-    expect(DEFAULT_SORT_CRITERIA).toEqual(SORT_CRITERIA);
+    expect(DEFAULT_SORT_CRITERIA).toEqual(
+      SORT_CRITERIA.filter((criterion) => !OPT_IN_CRITERIA.includes(criterion))
+    );
+  });
+
+  it("min_gap_between_moeds is still a selectable criterion, just not a default one", () => {
+    expect(SORT_CRITERIA).toContain("min_gap_between_moeds");
+    expect(SORT_CRITERION_TITLES.min_gap_between_moeds).toBeTruthy();
+    expect([1, -1]).toContain(CRITERION_DIRECTION.min_gap_between_moeds);
   });
 });
 
@@ -88,6 +112,39 @@ describe("describeThresholds", () => {
     expect(describeThresholds(settings({ maxExamsPerDay: 0 }))).toEqual([]);
   });
 
+  it("describes an active minGapBetweenMoeds threshold", () => {
+    const lines = describeThresholds(settings({ minGapBetweenMoeds: 7 }));
+    expect(lines[0]).toContain("7");
+  });
+
+  it("describes an active maxExamsPerWindow threshold with its window size", () => {
+    const lines = describeThresholds(settings({ maxExamsPerWindow: 2, windowDays: 5 }));
+    expect(lines).toHaveLength(1);
+    expect(lines[0]).toContain("2");
+    expect(lines[0]).toContain("5");
+  });
+
+  it("does not describe maxExamsPerWindow when windowDays is missing", () => {
+    expect(describeThresholds(settings({ maxExamsPerWindow: 2, windowDays: null }))).toEqual([]);
+  });
+
+  it("describes enforceTimeSlots with the slot count, when both are set", () => {
+    const lines = describeThresholds(settings({ enforceTimeSlots: true, timeSlots: ["09:00", "13:00"] }));
+    expect(lines).toHaveLength(1);
+    expect(lines[0]).toContain("2");
+  });
+
+  it("does not describe enforceTimeSlots when it is off, even though timeSlots defaults non-empty", () => {
+    // The load-bearing backward-compat guarantee: DEFAULT_SETTINGS.timeSlots
+    // already ships non-empty for the cosmetic pass, so this must stay silent
+    // unless the user explicitly opted in to enforcement.
+    expect(describeThresholds(settings({ enforceTimeSlots: false }))).toEqual([]);
+  });
+
+  it("does not describe enforceTimeSlots when timeSlots is empty, even if enforceTimeSlots is on", () => {
+    expect(describeThresholds(settings({ enforceTimeSlots: true, timeSlots: [] }))).toEqual([]);
+  });
+
   it("describes requireRooms when true", () => {
     const lines = describeThresholds(settings({ requireRooms: true }));
     expect(lines).toHaveLength(1);
@@ -126,7 +183,23 @@ describe("hasAggregateThresholds", () => {
     expect(hasAggregateThresholds(settings({ requireRooms: true }))).toBe(true);
   });
 
+  it("is true when maxExamsPerWindow is set", () => {
+    expect(hasAggregateThresholds(settings({ maxExamsPerWindow: 2, windowDays: 3 }))).toBe(true);
+  });
+
+  it("is true when enforceTimeSlots is on with slots configured", () => {
+    expect(hasAggregateThresholds(settings({ enforceTimeSlots: true, timeSlots: ["09:00"] }))).toBe(true);
+  });
+
+  it("is false when timeSlots is set but enforceTimeSlots is off (the plain default)", () => {
+    expect(hasAggregateThresholds(settings())).toBe(false);
+  });
+
   it("is false for a per-pair-only threshold like minDaysBetweenObligatory", () => {
     expect(hasAggregateThresholds(settings({ minDaysBetweenObligatory: 10 }))).toBe(false);
+  });
+
+  it("is false for a per-pair-only threshold like minGapBetweenMoeds", () => {
+    expect(hasAggregateThresholds(settings({ minGapBetweenMoeds: 5 }))).toBe(false);
   });
 });

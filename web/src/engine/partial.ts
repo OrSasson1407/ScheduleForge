@@ -1,45 +1,94 @@
 /**
  * Throwing an exam system away while it is still half built (version 3.0).
  *
- * The thresholds 2.3, 2.4, 2.5 and the room capacity are counts over a whole
- * exam system, so they cannot become rules between two exams and cannot enter
- * the decomposition. Checking them only on a finished system does not work: the
- * generator walks the components like an odometer, so the first exams stay
- * where they are for a very long time, and a bad placement of an early
- * component would be carried by every one of the millions of systems below it.
+ * The thresholds 2.3, 2.4, 2.5, 2.7 and the room capacity are counts over a
+ * whole exam system, so they cannot become rules between two exams and cannot
+ * enter the decomposition. Checking them only on a finished system does not
+ * work: the generator walks the components like an odometer, so the first
+ * exams stay where they are for a very long time, and a bad placement of an
+ * early component would be carried by every one of the millions of systems
+ * below it.
  *
  * The counts are therefore checked as the walk goes, on the exams placed so far.
  * `apply` and `unapply` are exact opposites, so the counters follow the walk up
  * and down without being rebuilt.
+ *
+ * Item 2 (opt-in time-of-day enforcement, `enforceTimeSlots`) lives here too,
+ * on the same footing: a date's exams only ever grow during the walk, so the
+ * greedy colouring in `timeSlots.ts` is re-run on the accumulated exams of a
+ * touched date on every `apply`, and a date that cannot be coloured is
+ * rejected the same way a broken count is.
  */
 
-import { Exam, fromIso } from "./model";
+import { addDays, EnrollmentRoster, Exam, fromIso } from "./model";
 import { Settings } from "./settings";
+import { colorDay } from "./timeSlots";
+
+/** Leftmost index a sorted-ascending `value` could be inserted at. */
+function bisectLeft(dates: string[], value: string): number {
+  let lo = 0;
+  let hi = dates.length;
+  while (lo < hi) {
+    const mid = (lo + hi) >> 1;
+    if (dates[mid] < value) lo = mid + 1;
+    else hi = mid;
+  }
+  return lo;
+}
+
+/** Rightmost index a sorted-ascending `value` could be inserted at. */
+function bisectRight(dates: string[], value: string): number {
+  let lo = 0;
+  let hi = dates.length;
+  while (lo < hi) {
+    const mid = (lo + hi) >> 1;
+    if (dates[mid] <= value) lo = mid + 1;
+    else hi = mid;
+  }
+  return lo;
+}
+
+function daysBetween(from: string, to: string): number {
+  return Math.round((fromIso(to).getTime() - fromIso(from).getTime()) / 86400000);
+}
 
 export class PartialThresholdChecker {
   private readonly students: number[];
   private readonly electivePrograms: string[][];
+  /**
+   * Every (program, year) an exam belongs to, for the window check below -
+   * unlike `electivePrograms`, this holds obligatory and elective slots
+   * alike, since a student's exam load is not lighter just because a course
+   * happens to be elective for them.
+   */
+  private readonly windowSlots: string[][];
   private readonly groupsByDepth = new Map<number, number[][]>();
 
   private dateCount = new Map<string, number>();
   private dateStudents = new Map<string, number>();
   private electiveCount = new Map<string, number>();
   private collisions = new Map<string, number>();
+  private windowDates = new Map<string, string[]>();
+  private examsOnDate = new Map<string, Exam[]>();
   private currentDate = new Map<number, string>();
   private applied = new Map<number, [number, string][]>();
+  private readonly colorEnforced: boolean;
 
   constructor(
-    exams: Exam[],
+    private readonly exams: Exam[],
     depthOfPosition: number[],
     private readonly settings: Settings,
-    private readonly totalCapacity: number | null
+    private readonly totalCapacity: number | null,
+    private readonly roster?: EnrollmentRoster
   ) {
+    this.colorEnforced = Boolean(settings.enforceTimeSlots && settings.timeSlots.length);
     this.students = exams.map((exam) => exam.course.students ?? settings.defaultStudents);
     this.electivePrograms = exams.map((exam) => [
       ...new Set(
         exam.slots.filter((slot) => slot.requirement === "Elective").map((slot) => slot.programNumber)
       ),
     ]);
+    this.windowSlots = exams.map((exam) => exam.slots.map((slot) => slot.key));
 
     // The obligatory exams of a study year, by the component that ends it.
     const groups = new Map<string, number[]>();
@@ -63,6 +112,8 @@ export class PartialThresholdChecker {
       this.settings.maxExamsPerDay ||
         this.settings.maxElectiveCollisions !== null ||
         this.settings.minObligatorySpan ||
+        this.settings.maxExamsPerWindow ||
+        this.colorEnforced ||
         this.totalCapacity !== null
     );
   }
@@ -72,6 +123,8 @@ export class PartialThresholdChecker {
     this.dateStudents = new Map();
     this.electiveCount = new Map();
     this.collisions = new Map();
+    this.windowDates = new Map();
+    this.examsOnDate = new Map();
     this.currentDate = new Map();
     this.applied = new Map();
   }
@@ -101,6 +154,20 @@ export class PartialThresholdChecker {
           if (total > this.settings.maxElectiveCollisions) ok = false;
         }
       }
+      if (this.settings.maxExamsPerWindow && this.settings.windowDays) {
+        for (const key of this.windowSlots[position]) {
+          const dates = this.windowDates.get(key) ?? [];
+          dates.splice(bisectRight(dates, date), 0, date);
+          this.windowDates.set(key, dates);
+          if (this.windowViolates(dates, date)) ok = false;
+        }
+      }
+      if (this.colorEnforced) {
+        const exams = this.examsOnDate.get(date) ?? [];
+        exams.push(this.exams[position]);
+        this.examsOnDate.set(date, exams);
+        if (colorDay(exams, this.settings.timeSlots.length, this.roster) === null) ok = false;
+      }
     }
     if (ok && this.settings.minObligatorySpan) ok = this.spansAreWideEnough(depth);
     return ok;
@@ -126,8 +193,46 @@ export class PartialThresholdChecker {
           this.collisions.set(programs[other], (this.collisions.get(programs[other]) ?? 0) - left);
         }
       }
+      if (this.settings.maxExamsPerWindow && this.settings.windowDays) {
+        const keys = this.windowSlots[position];
+        for (let other = keys.length - 1; other >= 0; other -= 1) {
+          const dates = this.windowDates.get(keys[other]);
+          if (dates) dates.splice(bisectLeft(dates, date), 1);
+        }
+      }
+      if (this.colorEnforced) {
+        const exams = this.examsOnDate.get(date);
+        if (exams) {
+          const at = exams.indexOf(this.exams[position]);
+          if (at !== -1) exams.splice(at, 1);
+        }
+      }
       this.currentDate.delete(position);
     }
+  }
+
+  /**
+   * Requirement 2.7 - does any window that now holds `newDate` overflow?
+   *
+   * Every window that could contain `newDate` starts at one of the dates
+   * already at or before it (in the same sorted list) and within
+   * `windowDays - 1` of it - counts only ever grow during the walk, so a
+   * window that does not contain the exam just placed could not have broken
+   * here; it would already have been caught on an earlier `apply`.
+   */
+  private windowViolates(dates: string[], newDate: string): boolean {
+    const windowDays = this.settings.windowDays!;
+    const maxPerWindow = this.settings.maxExamsPerWindow!;
+    let index = bisectLeft(dates, newDate);
+    while (index >= 0 && daysBetween(dates[index], newDate) <= windowDays - 1) {
+      const start = dates[index];
+      const end = addDays(start, windowDays - 1);
+      const first = bisectLeft(dates, start);
+      const last = bisectRight(dates, end);
+      if (last - first > maxPerWindow) return true;
+      index -= 1;
+    }
+    return false;
   }
 
   /** Requirement 2.4, for the study years this component completes. */
